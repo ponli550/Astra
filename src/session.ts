@@ -16,7 +16,7 @@ import {
   type WasmComponent,
   type TrustAnchor,
 } from "@terminal3/t3n-sdk";
-import { DECLARED_TENANT_DID, T3N_ENV, keys } from "./config.js";
+import { DECLARED_TENANT_DID, DECLARED_USER_DID, T3N_ENV, keys } from "./config.js";
 
 /** Loading the WASM component and the trust anchor is slow, so do it once. */
 let shared: Promise<{ wasmComponent: WasmComponent; trustAnchor: TrustAnchor }> | undefined;
@@ -108,4 +108,24 @@ export async function openTenantClient(): Promise<{ session: Session; tenant: Te
 /** Canonical `z:<tid>:<tail>` name for a tenant-owned resource. */
 export function canonicalName(tenantDid: string, tail: string): string {
   return `z:${tenantDid.slice("did:t3n:".length)}:${tail}`;
+}
+
+/**
+ * Resolve the identity whose grant a delegated call is checked against.
+ *
+ * Prefers the DID declared in the environment, which is what a real
+ * agent would receive out of band. Falls back to authenticating with
+ * the user's key, which is a demo-only shortcut: a production agent
+ * never holds the data owner's key.
+ */
+export async function resolveGrantSubject(): Promise<string> {
+  if (DECLARED_USER_DID) return DECLARED_USER_DID;
+
+  console.warn(
+    "USER_DID is not set, so falling back to authenticating with USER_KEY to\n" +
+      "resolve it. A real agent is given this DID out of band and never holds\n" +
+      "the data owner's key. Run `npm run grant` to get the line to paste.",
+  );
+  const user = await openUserSession();
+  return user.did;
 }
