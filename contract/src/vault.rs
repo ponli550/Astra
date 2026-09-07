@@ -1,6 +1,19 @@
 //! The gated vault. `vault-read` refuses to serve a record unless the
 //! node bound a calling user to the execution, and it records the
-//! access before returning.
+//! attempt whether or not the record is served.
+//!
+//! # Why a denial returns `Ok`
+//!
+//! The host rolls back everything a call wrote if that call returns
+//! `Err`, an audit append included. Implementing a business denial as
+//! an early `Err` therefore erases its own audit entry, leaving a trail
+//! that records only successes. A local test harness has no rollback
+//! concept, so that shape passes tests and still loses entries against
+//! the real store.
+//!
+//! So an expected denial is a successful return carrying
+//! `status: "denied"` and a reason. `Err` is reserved for genuine
+//! infrastructure faults, which have nothing meaningful to record.
 
 use serde::{Deserialize, Serialize};
 
@@ -30,14 +43,26 @@ pub struct VaultReadReq {
     pub purpose: Option<String>,
 }
 
+/// Outcome of a read attempt. `served` carries the payload; `denied`
+/// carries a reason and no payload. Both are successful returns, so
+/// both keep their audit entry.
 #[derive(Debug, Serialize)]
 pub struct VaultReadResp {
     pub record_id: String,
-    pub payload: String,
-    /// Key of the audit entry this read produced. The caller cannot
-    /// obtain the payload without also producing this record.
+    pub status: &'static str,
+    /// Present only when `status` is `served`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+    /// Present only when `status` is `denied`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Key of the audit entry this attempt produced. Written for a
+    /// denial as well as a success.
     pub audit_key: String,
 }
+
+pub const STATUS_SERVED: &str = "served";
+pub const STATUS_DENIED: &str = "denied";
 
 /// Record ids become KV keys, so they are constrained rather than
 /// trusted: no empty ids, no oversized ids, and no separator bytes
@@ -106,8 +131,9 @@ use crate::{
 /// Read the calling user DID the node bound to this execution.
 ///
 /// `None` means the contract was reached by a path that carries no
-/// authenticated session, so there is no principal to attribute the
-/// access to. Refuse rather than record an anonymous read.
+/// authenticated session. There is no principal to attribute the
+/// access to, and therefore no audit entry worth writing, so this is
+/// one of the few cases that is genuinely an `Err`.
 #[cfg(target_arch = "wasm32")]
 fn require_caller() -> Result<String, String> {
     match tenant_context::calling_user_did() {
@@ -121,7 +147,11 @@ fn require_caller() -> Result<String, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn base_entry(action: &str, record_id: &str, purpose: Option<String>) -> Result<AuditEntry, String> {
+fn base_entry(
+    action: &str,
+    record_id: &str,
+    purpose: Option<String>,
+) -> Result<AuditEntry, String> {
     Ok(AuditEntry {
         seq_no: tenant_context::seq_no(),
         at_secs: tenant_context::cluster_timestamp_secs(),
@@ -131,6 +161,8 @@ fn base_entry(action: &str, record_id: &str, purpose: Option<String>) -> Result<
         action: action.to_string(),
         record_id: record_id.to_string(),
         purpose: purpose.unwrap_or_default(),
+        outcome: STATUS_SERVED.to_string(),
+        reason: String::new(),
     })
 }
 
@@ -156,23 +188,52 @@ fn vault_put_wasm(req: VaultPutReq) -> Result<VaultPutResp, String> {
 fn vault_read_wasm(req: VaultReadReq) -> Result<VaultReadResp, String> {
     // Establish the principal BEFORE touching the record, so an
     // unattributable call never reads the data at all.
-    let entry = base_entry("vault-read", &req.record_id, req.purpose)?;
+    let mut entry = base_entry("vault-read", &req.record_id, req.purpose)?;
 
     let map = crate::map_name(crate::VAULT_TAIL);
-    let bytes = kv_store::get(&map, req.record_id.as_bytes())
-        .map_err(|e| format!("vault-read: read {map}: {e}"))?
-        .ok_or_else(|| format!("vault-read: no record '{}'", req.record_id))?;
-    let payload = String::from_utf8(bytes)
-        .map_err(|e| format!("vault-read: record is not valid UTF-8: {e}"))?;
 
-    // Same transaction as the read: if this write fails the whole
-    // invocation fails, so the payload cannot leave without a record.
+    // A KV failure is an infrastructure fault, so it stays an `Err`.
+    let found = kv_store::get(&map, req.record_id.as_bytes())
+        .map_err(|e| format!("vault-read: read {map}: {e}"))?;
+
+    let payload = match found {
+        Some(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => Some(text),
+            Err(_) => {
+                // Stored data we cannot return is a denial, not a fault:
+                // record the attempt rather than erasing it.
+                entry.outcome = STATUS_DENIED.to_string();
+                entry.reason = "stored record is not valid UTF-8".to_string();
+                None
+            }
+        },
+        None => {
+            entry.outcome = STATUS_DENIED.to_string();
+            entry.reason = "no such record".to_string();
+            None
+        }
+    };
+
+    // Same transaction as the read. A served payload cannot leave
+    // without its entry, and a denial keeps its entry because this
+    // function returns `Ok` either way.
     let audit_key = audit::append(&entry)?;
 
-    Ok(VaultReadResp {
-        record_id: req.record_id,
-        payload,
-        audit_key,
+    Ok(match payload {
+        Some(text) => VaultReadResp {
+            record_id: req.record_id,
+            status: STATUS_SERVED,
+            payload: Some(text),
+            reason: None,
+            audit_key,
+        },
+        None => VaultReadResp {
+            record_id: req.record_id,
+            status: STATUS_DENIED,
+            payload: None,
+            reason: Some(entry.reason),
+            audit_key,
+        },
     })
 }
 
@@ -182,7 +243,9 @@ mod tests {
 
     #[test]
     fn rejects_empty_record_id() {
-        assert!(validate_record_id("").unwrap_err().contains("must not be empty"));
+        assert!(validate_record_id("")
+            .unwrap_err()
+            .contains("must not be empty"));
     }
 
     #[test]
@@ -232,5 +295,34 @@ mod tests {
         let input = serde_json::to_vec(&serde_json::json!({ "record_id": "a:b" })).unwrap();
         let err = vault_read(&input).unwrap_err();
         assert!(err.contains("record_id may contain only"), "got: {err}");
+    }
+
+    #[test]
+    fn denied_response_carries_no_payload() {
+        // The denial shape must never serialise a payload field, so a
+        // consumer cannot mistake an absent payload for an empty one.
+        let denied = VaultReadResp {
+            record_id: "medical-1".to_string(),
+            status: STATUS_DENIED,
+            payload: None,
+            reason: Some("no such record".to_string()),
+            audit_key: "00000000000000000007".to_string(),
+        };
+        let json = serde_json::to_string(&denied).unwrap();
+        assert!(!json.contains("payload"), "denial leaked a payload key: {json}");
+        assert!(json.contains("\"status\":\"denied\""));
+    }
+
+    #[test]
+    fn served_response_carries_no_reason() {
+        let served = VaultReadResp {
+            record_id: "medical-1".to_string(),
+            status: STATUS_SERVED,
+            payload: Some("data".to_string()),
+            reason: None,
+            audit_key: "00000000000000000008".to_string(),
+        };
+        let json = serde_json::to_string(&served).unwrap();
+        assert!(!json.contains("reason"), "success carried a reason: {json}");
     }
 }

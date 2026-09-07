@@ -1,6 +1,6 @@
 [package]
 name = "z-tenant-consent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Auditable-consent data vault for T3N z-space tenants"
 license = "MIT"
