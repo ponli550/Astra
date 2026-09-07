@@ -7,17 +7,45 @@ audit entry.
 
 ## What it demonstrates
 
-- **Three separate identities.** Tenant, agent and user are distinct sessions
-  with distinct keys and distinct credit balances.
-- **Authentication is not authorisation.** The agent authenticates on its own
-  key and still has no access. Only the data owner can grant it, and the grant
-  names one contract, two functions and an expiry.
-- **The audit record is inseparable from the access.** The contract resolves
-  the caller, reads the record and appends the audit entry in one transaction.
-  A read that is not recorded cannot commit.
-- **Provenance cannot be forged.** Sequence number, cluster timestamp,
-  contract id and calling identity all come from node-minted context inside
-  the enclave, never from the caller's input.
+Verified against testnet:
+
+- **A tamper-evident audit trail.** Every access attempt is recorded in the
+  same transaction as the access, so a read that is not recorded cannot commit.
+  Provenance comes from node-minted context inside the enclave, so the caller
+  identity, timestamp, sequence number and contract id cannot be forged by
+  whoever made the call.
+- **Denials are recorded as faithfully as successes.** The host rolls back
+  everything a failed call wrote, so denials return successfully with a reason
+  rather than as errors. A trail that only recorded successes would be worthless.
+- **The contract refuses a call it cannot attribute.** Reached by a path with no
+  authenticated session, it returns an error rather than serving anonymously.
+- **Separate identities and delegated grants.** A grant names one contract, its
+  functions, its egress hosts, and a validity window, and is issued by the data
+  owner rather than the tenant or the agent.
+
+## What is NOT enforced, and this matters
+
+**The grant's function list is not a hard gate for this contract.** The
+platform's enforcement point for a tenant contract is **egress**. The published
+reference revokes access by clearing allowed hosts while leaving the function
+list populated, and its own architecture notes say the function still runs and
+only the outbound call fails.
+
+This contract makes no outbound call, so there is nothing for the platform to
+deny. Verified: with the grant fully revoked, `vault-read` still returns the
+record.
+
+Importing only the base capability set removed the external dependency and it
+removed the enforcement lever along with it. Two consequences:
+
+1. **Describe the audit trail as the guarantee, not the function scope as a
+   barrier.** The trail is real, unforgeable and verified. The function list is
+   an expression of intent that this contract's shape cannot enforce.
+2. **Making consent enforceable needs one of two changes.** Either give the
+   contract an outbound call so egress becomes the lever, which is how the
+   reference works, or have the contract enforce its own policy from a KV map,
+   which is what the reference's contract also does for its caps and
+   allowlists. Neither is done here.
 
 ## Layout
 
