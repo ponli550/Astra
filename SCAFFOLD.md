@@ -192,7 +192,13 @@ one-time credential before printing anything. `npm run agent:mint -- second`
 adds agent B to the same organisation.
 
 Minted agents start at zero balance and every call bills the caller, so their
-calls fail with `InsufficientCredit` until Terminal 3 grants credits. The error
+calls fail with `InsufficientCredit` until Terminal 3 grants credits. A key
+claimed from the claim page with a separate work email arrives funded and works
+as `AGENT_KEY` or `AGENT2_KEY`; that is how the live run was done.
+
+The contract identifies the caller from the node-minted context bytes, because
+on a delegated call the host's `calling-user-did` reports the subject rather
+than the agent. `whoami` returns both, for diagnosis. The error
 surfaces as a generic 403 the SDK scrubs to "forbidden". The `required` figure
 in it is a 10,000-token per-call reservation, not the charge, so an agent with
 less than that cannot make a single call however cheap the call is.
@@ -272,6 +278,12 @@ this project.
   prints anyway.
 - **Metering charges on attempt, not on success.** A debugging session chasing
   a failure burns credit on every failed call.
+- **Registering a contract is the expensive operation.** Five redeploys in one
+  day drained a fresh 20,000-credit balance that had comfortably absorbed
+  hundreds of reads and writes. Treat deploys as the scarce resource. Two of
+  those five were avoidable: one to recover a contract id lost to a truncated
+  terminal, since fixed by persisting it, and one purely to inspect the
+  context bytes.
 - **Polling burns credit fast.** The console makes three metered calls per
   poll. Left at a two-second interval it exhausted a fresh testnet balance
   during development, and it tripped the per-minute fuel quota on the way. The

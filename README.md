@@ -72,11 +72,26 @@ own record and leave a trail of successes only.
 **The audit write shares the read's transaction.** A read that is not recorded
 cannot commit.
 
-**The delegation grant is not the gate.** The platform's enforcement point for a
-tenant contract is outbound network access, and this contract makes none.
-Verified: with the grant fully revoked, reads still succeeded. So the contract
-enforces consent itself, which is the pattern Terminal 3's own reference
-implementation names for itself.
+**Two layers, and which one decides depends on who is calling.** On a
+self-call, where the caller is the data owner, the platform's delegation grant
+is not consulted and the contract's policy is the only gate. Verified: with the
+grant fully revoked, the owner's own reads still succeeded. On a delegated call,
+where an agent acts for the owner, the platform checks the owner's grant per
+function *before dispatch* and refuses with `function_not_delegated`. Verified
+live with two funded agents. So the grant is a real, flat, owner-issued gate on
+agents, and the contract's policy adds the chain and the narrowing on top of it.
+Both must pass.
+
+**The caller is read from the node-minted context, not from `calling-user-did`.**
+On a delegated call the host's tenant-context reports the *subject*, the owner
+whose data it is, not the agent doing the calling. The agent is only visible as
+`authenticated_did` inside the context bytes every function receives. Keying
+consent on the wrong field made an agent's read look like the owner's own. The
+trail now records both: who called, and for whom.
+
+**Grants are unpinned.** A grant pinned to the exact contract version at issue
+time stops matching on the next redeploy and every delegated call then fails
+before dispatch. The reference demo grants unpinned for the same reason.
 
 ## Consent chains
 
@@ -91,17 +106,23 @@ fall out of that definition rather than being enforced separately:
 - **Withdrawing consent at the root empties every chain beneath it**, with
   nothing deleted. An intersection with nothing is nothing.
 
-Verified live on testnet as the tenant: a subset handoff served, a widening
-attempt refused with its reason, both in the trail. Two org-owned agents are
-minted for the live agent-to-agent run; their calls are blocked on a credit
-grant from Terminal 3, since minted agents start at zero and every call bills
-the caller.
+Verified live on testnet with three funded identities. The owner granted agent
+A. A read the record and was stopped from writing by the platform. A handed
+agent B `vault-read` only, and was refused inside the enclave when it tried to
+hand on `vault-put`. B read under that handoff, attributed in the trail as B
+acting for the owner. The owner withdrew the root, and both agents' next reads
+were refused.
+
+Org-minted agents start at zero balance and every call bills the caller, so the
+live run used agents claimed from the claim page with separate work emails,
+which arrive funded. That is the vendor's documented route for agent keys.
 
 ```bash
-CALLER=tenant npm run delegate          # root hands agent B vault-read only
-CALLER=tenant npm run delegate -- widen # tries to add vault-put; refused
-CALLER=second npm run invoke            # B reads under the delegation (needs credits)
-npm run policy:deny                     # root withdrawn; B's permission empties
+npm run policy:allow                    # owner signs; names agent A as root
+npm run delegate                        # A hands agent B vault-read only
+npm run delegate -- widen               # A tries to add vault-put; refused
+CALLER=second npm run invoke            # B reads under the delegation
+npm run policy:deny                     # root withdrawn; A and B both refused
 ```
 
 ## Run it
