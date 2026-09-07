@@ -80,7 +80,7 @@ export const CONTRACT_TAIL = optional("CONTRACT_TAIL") ?? "consent-vault";
  * Bump this on every re-register. A version that is not strictly
  * higher than the deployed one is refused.
  */
-export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.2.0";
+export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.3.0";
 
 /** Built by `npm run contract:build`. */
 export const WASM_PATH =
@@ -88,6 +88,7 @@ export const WASM_PATH =
 
 export const VAULT_MAP_TAIL = "vault";
 export const AUDIT_MAP_TAIL = "audit";
+export const POLICY_MAP_TAIL = "policy";
 
 /** How long the user's grant to the agent stays valid, in seconds. */
 export const GRANT_TTL_SECS = Number(optional("GRANT_TTL_SECS") ?? "900");

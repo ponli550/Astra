@@ -14,6 +14,7 @@ import {
   CONTRACT_VERSION,
   DEMO_RECORD,
   KNOWN_CONTRACT_ID,
+  POLICY_MAP_TAIL,
   VAULT_MAP_TAIL,
   WASM_PATH,
 } from "./config.js";
@@ -75,7 +76,7 @@ async function main() {
   // `readers` must be set explicitly. The access governor defaults to
   // deny, so omitting it creates a map nobody can read: no error now,
   // an access failure much later.
-  for (const tail of [VAULT_MAP_TAIL, AUDIT_MAP_TAIL]) {
+  for (const tail of [VAULT_MAP_TAIL, AUDIT_MAP_TAIL, POLICY_MAP_TAIL]) {
     try {
       const created = await tenant.maps.create({
         tail,
@@ -117,7 +118,13 @@ async function main() {
   );
   console.log(`seeded vault record ${DEMO_RECORD}`);
 
-  console.log(`\nnext: npm run grant`);
+  console.log(
+    `\nThe policy map is empty, which denies everyone. That is deliberate:\n` +
+      `a missing policy must not mean "allow", or forgetting this step would\n` +
+      `silently disable the gate.`,
+  );
+
+  console.log(`\nnext: npm run policy:allow`);
 }
 
 /** Show the path actually tried, so a bad relative path is obvious. */
