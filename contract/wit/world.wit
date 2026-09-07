@@ -10,7 +10,7 @@
 /// third-party API key and no egress grant. Adding an outbound call
 /// later means adding the import here AND adding the host to the
 /// delegating user's `allowed_hosts`.
-package z:tenant-consent@0.2.0;
+package z:tenant-consent@0.3.0;
 
 world tenant-consent {
     import host:tenant/tenant-context@1.0.0;
@@ -44,6 +44,21 @@ interface contracts {
 
     /// Enumerate audit entries in sequence order.
     /// Input  (JSON): { limit }
-    /// Output (JSON): { entries: [AuditEntry], count }
+    /// Output (JSON): { entries: [AuditEntry], count, malformed-entries }
     audit-list: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Replace the consent policy. Permitted only from the tenant's own
+    /// identity, checked inside the enclave against node-minted context,
+    /// and recorded in the same audit trail as the accesses so that
+    /// widening permission is as visible as using it.
+    /// Input  (JSON): { allowed_callers, allowed_functions, valid_until_secs }
+    /// Output (JSON): { version, allowed_callers, allowed_functions,
+    ///                  valid_until_secs, audit_key }
+    policy-set: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Read the consent policy in force. Readable by the tenant, so the
+    /// owner can inspect what they have granted.
+    /// Output (JSON): { version, allowed_callers, allowed_functions,
+    ///                  valid_until_secs, now_secs, expired }
+    policy-get: func(req: generic-input) -> result<list<u8>, string>;
 }
