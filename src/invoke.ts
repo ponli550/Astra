@@ -77,9 +77,15 @@ async function main() {
   console.log(`vault-read ${DEMO_RECORD}: ${served.status}`);
   console.log(`  payload   ${served.payload ?? "(none)"}`);
   console.log(`  audit_key ${served.audit_key}`);
-  if (served.status !== "served") {
-    console.warn(`  expected this read to be served, got ${served.status}: ${served.reason}`);
+  // What this run is expected to show. The demo runs the same script
+  // twice, once with consent withdrawn and once with it granted, so the
+  // expectation is a parameter rather than a constant.
+  const expect = (process.env["EXPECT"] ?? "served").toLowerCase();
+  if (served.status !== expect) {
+    console.warn(`  expected this read to be ${expect}, got ${served.status}: ${served.reason ?? ""}`);
     process.exitCode = 1;
+  } else if (expect === "denied") {
+    console.log(`  refused inside the enclave, as expected with consent withdrawn`);
   }
 
   // --- a record that does not exist --------------------------------
