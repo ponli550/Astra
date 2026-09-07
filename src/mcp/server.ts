@@ -7,14 +7,17 @@
  *
  * # Why all three functions are exposed, including the withheld one
  *
- * `vault_put` is offered here even though the user's grant does not
- * cover it. That is deliberate. A model that decides to write to the
- * vault is refused by the node, not by this file.
+ * `vault_put` is offered even though the owner's grant does not name
+ * it, and it is not this process's job to hide it. Tool availability is
+ * not authorization, so the tool list is a menu rather than a security
+ * boundary.
  *
- * Tool availability is not authorization. An agent's tool list is a
- * menu; the enclave decides what is actually served. Hiding the
- * withheld tool would make this process look like the security
- * boundary, which is the confusion most worth dispelling.
+ * Be careful what you claim from that, though. The platform's
+ * enforcement point for a tenant contract is egress, and this contract
+ * makes no outbound call, so a write may succeed despite being outside
+ * the grant. Verified against testnet. What the write cannot escape is
+ * the audit trail, which records it against this identity with
+ * provenance set inside the enclave. Treat the trail as the guarantee.
  *
  * # What this process holds
  *
@@ -28,7 +31,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
 import { z } from "zod";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID, T3N_ENV } from "../config.js";
-import { canonicalName, openAgentSession, resolveGrantSubject } from "../session.js";
+import { canonicalName, openCallerSession, resolveGrantSubject } from "../session.js";
 import type { Session } from "../session.js";
 
 /** Authentication is slow, so one session is shared across tool calls. */
@@ -39,7 +42,7 @@ function context() {
     if (!DECLARED_TENANT_DID) {
       throw new Error("DID is not set. It names the tenant that owns the contract.");
     }
-    const agent = await openAgentSession();
+    const agent = await openCallerSession();
     const contract = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
     const [version, subject] = await Promise.all([
       getContractVersion(getNodeUrl(), contract),
@@ -172,11 +175,14 @@ server.registerTool(
 server.registerTool(
   "vault_put",
   {
-    title: "Write a record into the vault (normally not authorised)",
+    title: "Write a record into the vault",
     description:
-      "Store a record. This tool is offered but the data owner's grant deliberately " +
-      "withholds it, so the node is expected to refuse. It exists to show that a tool " +
-      "being listed is not the same as a call being permitted.",
+      "Store a record. The data owner's grant deliberately does not name this " +
+      "function. Be aware that the platform's enforcement point for this contract " +
+      "is outbound network access, which this contract never uses, so the write may " +
+      "well succeed anyway. What it cannot avoid is being recorded: the audit trail " +
+      "will show the write, attributed to this identity, with provenance set inside " +
+      "the enclave.",
     inputSchema: {
       record_id: z.string().describe("Record identifier."),
       payload: z.string().describe("Record contents."),

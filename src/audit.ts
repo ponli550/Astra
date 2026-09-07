@@ -10,7 +10,7 @@
  */
 import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "./config.js";
-import { canonicalName, openAgentSession, resolveGrantSubject } from "./session.js";
+import { canonicalName, openCallerSession, resolveGrantSubject } from "./session.js";
 
 interface AuditEntry {
   seq_no: number;
@@ -36,7 +36,7 @@ async function main() {
     throw new Error("DID is not set in .env. It names the tenant that owns the contract.");
   }
 
-  const agent = await openAgentSession();
+  const agent = await openCallerSession();
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
   const version = await getContractVersion(getNodeUrl(), contractName);
   const subject = await resolveGrantSubject();

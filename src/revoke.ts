@@ -17,14 +17,14 @@
  * here.
  */
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "./config.js";
-import { canonicalName, openAgentSession, openOwnerSession } from "./session.js";
+import { canonicalName, openCallerSession, openOwnerSession } from "./session.js";
 
 async function main() {
   if (!DECLARED_TENANT_DID) {
     throw new Error("DID is not set in .env. It names the tenant that owns the contract.");
   }
 
-  const agent = await openAgentSession();
+  const agent = await openCallerSession();
   const user = await openOwnerSession();
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
 

@@ -19,6 +19,7 @@ import {
 import {
   DECLARED_TENANT_DID,
   DECLARED_USER_DID,
+  MODE,
   T3N_ENV,
   hasSeparateOwner,
   keys,
@@ -75,7 +76,25 @@ export async function openSession(role: string, privateKey: string): Promise<Ses
 }
 
 export const openTenantSession = () => openSession("tenant", keys.tenant);
-export const openAgentSession = () => openSession("agent", keys.agent);
+
+/**
+ * Open a session for whoever calls the contract.
+ *
+ * In delegated mode this is a separate agent identity. In self-grant
+ * mode it is the data owner calling its own contract, which the platform
+ * documents for direct calls and which is what one funded identity
+ * allows. Either way the call names a grant subject and the enclave
+ * checks a grant that can be withdrawn.
+ */
+export const openCallerSession = () =>
+  MODE === "delegated"
+    ? openSession("agent", keys.agent)
+    : hasSeparateOwner
+      ? openSession("caller (owner)", keys.user)
+      : openSession("caller (tenant)", keys.tenant);
+
+/** Kept as the delegated-mode name, for scripts that mean the agent. */
+export const openAgentSession = openCallerSession;
 
 /**
  * Open a session for the data owner: the identity that grants the agent
