@@ -73,6 +73,8 @@ identity that is the same person who owns the data. Two honest limits follow:
 | `src/policy.ts` | Consent administration: show, grant, withdraw |
 | `src/monitor/` | The owner's console: consent state, audit trail, withdraw |
 | `opencode.jsonc` | Registers the tool server with OpenCode |
+| `docs/demo.tape` | Script that renders the README recording |
+| `docs/narration.md` | Spoken walkthrough script and shot list |
 
 The contract imports only `tenant-context`, `logging` and `kv-store`, so it
 links against the base tenant world. There is no outbound HTTP, which means no
@@ -245,6 +247,14 @@ this project.
   prints anyway.
 - **Metering charges on attempt, not on success.** A debugging session chasing
   a failure burns credit on every failed call.
+- **Polling burns credit fast.** The console makes three metered calls per
+  poll. Left at a two-second interval it exhausted a fresh testnet balance
+  during development, and it tripped the per-minute fuel quota on the way. The
+  interval is ten seconds now, and `MONITOR_POLL_MS` raises it further. Leave
+  the console running only while you are watching it.
+- **An exhausted balance stops even reads.** Reading your own usage is metered
+  too, so once the balance is zero there is no self-serve way to inspect it. The
+  error names the account and the shortfall, which is the only signal left.
 - **One key per work email.** The claim page is self-serve and issues the key
   with credits attached, but a second identity needs a second address. Plan
   around two identities rather than three.
@@ -260,9 +270,9 @@ this project.
 - **`tenant_did()` returns raw bytes.** It must be hex-encoded before building
   a `z:<tid>:<tail>` map name.
 
-## Where the README's docs are out of date
+## Where the vendor docs are out of date
 
-The bundled `README.md` is a documentation dump. Against SDK 5.2 it is wrong
+The vendor documentation kept at `docs/t3n-adk-reference.md` Against SDK 5.2 it is wrong
 in three ways worth knowing:
 
 1. The grant shape it teaches is deprecated. `AgentAuthScriptGrant` and
