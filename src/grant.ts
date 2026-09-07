@@ -15,7 +15,7 @@ import {
   DECLARED_TENANT_DID,
   GRANT_TTL_SECS,
 } from "./config.js";
-import { canonicalName, openAgentSession, openUserSession } from "./session.js";
+import { canonicalName, openAgentSession, openOwnerSession } from "./session.js";
 
 /** Functions the agent is allowed to call. Read-only, deliberately. */
 export const GRANTED_FUNCTIONS = ["vault-read", "audit-list"];
@@ -37,7 +37,7 @@ async function main() {
   // The agent DID can only be learned by authenticating as the agent.
   // Never hardcode or derive it.
   const agent = await openAgentSession();
-  const user = await openUserSession();
+  const user = await openOwnerSession();
 
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
   const version = await getContractVersion(getNodeUrl(), contractName);

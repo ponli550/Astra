@@ -37,16 +37,29 @@ third-party API key and no egress grant to configure.
 
 ## Setup
 
-Claim keys for **three** identities, one each for the tenant, the agent and
-the user. The tenant key is self-serve from the test-token page. Be aware that
-a key-only agent identity may have no self-serve path to its own credit
-balance, and balances are generally not transferable between identities, so
-budget for asking for a manual grant. Then:
+**Two keys is all you need.** The claim page issues one per work email, so
+three identities would mean three addresses.
+
+| Identity | Key | Role |
+| --- | --- | --- |
+| Tenant | `T3N_API_KEY` | Owns the contract and maps; also acts as the data owner |
+| Agent | `AGENT_KEY` | The delegatee. Its own key, always |
+| Data owner | `USER_KEY` | Optional. Blank means the tenant plays this role |
+
+Leaving `USER_KEY` blank is how Terminal 3's own reference demo is written: it
+runs its grant as the tenant and sets the grant subject to the tenant's
+identity. The cost is narration, not substance. With two keys the demo reads as
+a developer delegating to their own agent rather than a third party delegating
+to someone else's, while the enforcement and the audit trail are identical.
+
+The agent is the one identity that cannot be shared. An identity granting
+itself is a self-grant, which demonstrates nothing, and an agent's credit
+balance is separate from its tenant's and starts at zero.
 
 ```bash
-cp .env.example .env      # fill in T3N_API_KEY, DID, AGENT_KEY, USER_KEY
+cp .env.example .env      # fill in T3N_API_KEY, DID and AGENT_KEY
 npm install
-npm run whoami            # confirms all three authenticate before spending credits
+npm run whoami            # confirms the identities before spending credits
 ```
 
 ## Run
@@ -128,8 +141,9 @@ npm run monitor
 Press `r` to withdraw the agent's grant and watch its next call fail, with no
 redeploy and no code change. Restore it with `npm run grant`.
 
-The console authenticates as the **data owner**, not the agent, and reads the
-trail through the owner's own self-grant. That is why `npm run grant` issues a
+The console authenticates as the **data owner**, which is the tenant identity
+unless a third key is set, and reads the trail through the owner's own
+self-grant. That is why `npm run grant` issues a
 second grant to the user for `audit-list`. Reading the trail through the
 agent's grant would mean revoking the agent blinded the very console you revoke
 from, so the owner's console must not depend on the authority it can withdraw.
@@ -170,6 +184,9 @@ this project.
   prints anyway.
 - **Metering charges on attempt, not on success.** A debugging session chasing
   a failure burns credit on every failed call.
+- **One key per work email.** The claim page is self-serve and issues the key
+  with credits attached, but a second identity needs a second address. Plan
+  around two identities rather than three.
 - **A map created without explicit `readers` is unreadable.** The access
   governor defaults to deny and creation still succeeds, so the failure
   surfaces much later as an access error.
