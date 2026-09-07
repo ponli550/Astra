@@ -90,38 +90,38 @@ pub fn validate_record_id(record_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn vault_put(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn vault_put(input: &[u8], context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let req: VaultPutReq =
         serde_json::from_slice(input).map_err(|e| format!("vault-put: bad input: {e}"))?;
     validate_record_id(&req.record_id).map_err(|e| format!("vault-put: {e}"))?;
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = vault_put_wasm(req)?;
+        let resp = vault_put_wasm(req, context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = req;
+        let _ = (req, context);
         Err("vault_put reaches the host and only runs on the wasm32 target".to_string())
     }
 }
 
-pub fn vault_read(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn vault_read(input: &[u8], context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let req: VaultReadReq =
         serde_json::from_slice(input).map_err(|e| format!("vault-read: bad input: {e}"))?;
     validate_record_id(&req.record_id).map_err(|e| format!("vault-read: {e}"))?;
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = vault_read_wasm(req)?;
+        let resp = vault_read_wasm(req, context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = req;
+        let _ = (req, context);
         Err("vault_read reaches the host and only runs on the wasm32 target".to_string())
     }
 }
@@ -130,39 +130,33 @@ pub fn vault_read(input: &[u8]) -> Result<Vec<u8>, String> {
 use crate::{
     audit::{self, AuditEntry},
     host::{interfaces::kv_store, tenant::tenant_context},
+    identity,
     policy::{self, Delegation, Policy},
 };
 
-/// Read the calling user DID the node bound to this execution.
+/// Build an audit entry stamped with who called and on whose behalf.
 ///
-/// `None` means the contract was reached by a path that carries no
-/// authenticated session. There is no principal to attribute the
-/// access to, and therefore no audit entry worth writing, so this is
-/// one of the few cases that is genuinely an `Err`.
-#[cfg(target_arch = "wasm32")]
-fn require_caller() -> Result<String, String> {
-    match tenant_context::calling_user_did() {
-        Some(did) => Ok(hex::encode(&did)),
-        None => Err(
-            "no calling user bound to this execution: invoke through an authenticated \
-             session, not a direct dev-exec or webhook dispatch"
-                .to_string(),
-        ),
-    }
-}
-
+/// The caller is whoever authenticated, read from the node-minted context
+/// (`authenticated_did`). On a delegated call that is the agent. The
+/// subject is whose data it is (`user_did`). Both are node-minted, neither
+/// comes from the request, and the consent policy is evaluated against
+/// the caller. Keying it on the subject instead was the bug that made an
+/// agent's delegated read look like the owner's own.
 #[cfg(target_arch = "wasm32")]
 fn base_entry(
     action: &str,
     record_id: &str,
     purpose: Option<String>,
+    context: Option<&[u8]>,
 ) -> Result<AuditEntry, String> {
+    let ids = identity::resolve(context)?;
     Ok(AuditEntry {
         seq_no: tenant_context::seq_no(),
         at_secs: tenant_context::cluster_timestamp_secs(),
         contract_id: tenant_context::contract_id(),
         tenant_did: hex::encode(tenant_context::tenant_did()),
-        caller_did: require_caller()?,
+        caller_did: ids.caller,
+        subject_did: ids.subject,
         action: action.to_string(),
         record_id: record_id.to_string(),
         purpose: purpose.unwrap_or_default(),
@@ -172,8 +166,8 @@ fn base_entry(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn vault_put_wasm(req: VaultPutReq) -> Result<VaultPutResp, String> {
-    let mut entry = base_entry("vault-put", &req.record_id, None)?;
+fn vault_put_wasm(req: VaultPutReq, context: Option<&[u8]>) -> Result<VaultPutResp, String> {
+    let mut entry = base_entry("vault-put", &req.record_id, None, context)?;
 
     // Same gate as the read. With the policy naming only vault-read,
     // this is where an unauthorised write is actually stopped, which the
@@ -210,10 +204,10 @@ fn vault_put_wasm(req: VaultPutReq) -> Result<VaultPutResp, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn vault_read_wasm(req: VaultReadReq) -> Result<VaultReadResp, String> {
+fn vault_read_wasm(req: VaultReadReq, context: Option<&[u8]>) -> Result<VaultReadResp, String> {
     // Establish the principal BEFORE touching the record, so an
     // unattributable call never reads the data at all.
-    let mut entry = base_entry("vault-read", &req.record_id, req.purpose)?;
+    let mut entry = base_entry("vault-read", &req.record_id, req.purpose, context)?;
 
     // The consent gate. This is the check the delegation grant does not
     // make for a contract with no egress, so the contract makes it.
@@ -320,7 +314,7 @@ mod tests {
 
     #[test]
     fn read_rejects_non_json() {
-        assert!(vault_read(b"not json").unwrap_err().contains("bad input"));
+        assert!(vault_read(b"not json", None).unwrap_err().contains("bad input"));
     }
 
     #[test]
@@ -334,13 +328,13 @@ mod tests {
             "caller_did": "deadbeef",
         }))
         .unwrap();
-        assert!(vault_put(&input).unwrap_err().contains("bad input"));
+        assert!(vault_put(&input, None).unwrap_err().contains("bad input"));
     }
 
     #[test]
     fn read_validates_id_before_reaching_host() {
         let input = serde_json::to_vec(&serde_json::json!({ "record_id": "a:b" })).unwrap();
-        let err = vault_read(&input).unwrap_err();
+        let err = vault_read(&input, None).unwrap_err();
         assert!(err.contains("record_id may contain only"), "got: {err}");
     }
 
@@ -425,7 +419,7 @@ pub fn validate_caller_hex(caller: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn policy_set(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn policy_set(input: &[u8], context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let req: PolicySetReq =
         serde_json::from_slice(input).map_err(|e| format!("policy-set: bad input: {e}"))?;
     for caller in &req.allowed_callers {
@@ -434,53 +428,53 @@ pub fn policy_set(input: &[u8]) -> Result<Vec<u8>, String> {
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = policy_set_wasm(req)?;
+        let resp = policy_set_wasm(req, context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = req;
+        let _ = (req, context);
         Err("policy_set reaches the host and only runs on the wasm32 target".to_string())
     }
 }
 
-pub fn policy_get() -> Result<Vec<u8>, String> {
+pub fn policy_get(context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = policy_get_wasm()?;
+        let resp = policy_get_wasm(context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = context;
         Err("policy_get reaches the host and only runs on the wasm32 target".to_string())
     }
 }
 
 /// Only the tenant that owns this contract may read or change the policy.
 ///
-/// The comparison is between two values the node mints: the calling
-/// identity and the tenant this contract runs under. Neither comes from
-/// the request, so a caller cannot claim to be the owner. This is an
-/// `Err` rather than a recorded denial because a caller with no standing
-/// to touch policy has nothing worth recording against the consent
-/// trail, and the check runs before any policy is read.
+/// Compared against the AUTHENTICATED identity, not the subject. An agent
+/// acting on the tenant's behalf has the tenant as its subject, and if
+/// this checked the subject, any agent with a platform grant naming
+/// policy-set could rewrite consent for the owner. Both values are minted
+/// by the node; neither comes from the request.
 #[cfg(target_arch = "wasm32")]
-fn require_tenant(action: &str) -> Result<String, String> {
-    let caller = require_caller()?;
+fn require_tenant(action: &str, context: Option<&[u8]>) -> Result<String, String> {
+    let ids = identity::resolve(context)?;
     let tenant = hex::encode(tenant_context::tenant_did());
-    if !caller.eq_ignore_ascii_case(&tenant) {
+    if !ids.caller.eq_ignore_ascii_case(&tenant) {
         return Err(format!(
             "{action}: only the tenant that owns this contract may do this"
         ));
     }
-    Ok(caller)
+    Ok(ids.caller)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn policy_set_wasm(req: PolicySetReq) -> Result<PolicySetResp, String> {
-    require_tenant("policy-set")?;
+fn policy_set_wasm(req: PolicySetReq, context: Option<&[u8]>) -> Result<PolicySetResp, String> {
+    require_tenant("policy-set", context)?;
 
     let existing = policy::load()?;
     let next = Policy {
@@ -498,7 +492,7 @@ fn policy_set_wasm(req: PolicySetReq) -> Result<PolicySetResp, String> {
 
     // Recorded in the same trail as the accesses, so widening permission
     // is as visible as using it.
-    let mut entry = base_entry("policy-set", "consent", None)?;
+    let mut entry = base_entry("policy-set", "consent", None, context)?;
     entry.reason = alloc::format!(
         "version {} -> {}, {} caller(s), {} function(s), expiry {}",
         existing.version,
@@ -521,8 +515,8 @@ fn policy_set_wasm(req: PolicySetReq) -> Result<PolicySetResp, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn policy_get_wasm() -> Result<PolicyGetResp, String> {
-    require_tenant("policy-get")?;
+fn policy_get_wasm(context: Option<&[u8]>) -> Result<PolicyGetResp, String> {
+    require_tenant("policy-get", context)?;
 
     let current = policy::load()?;
     let now_secs = tenant_context::cluster_timestamp_secs();
@@ -566,13 +560,13 @@ mod policy_admin_tests {
             "allowed_functions": ["vault-read"],
         }))
         .unwrap();
-        let err = policy_set(&input).unwrap_err();
+        let err = policy_set(&input, None).unwrap_err();
         assert!(err.contains("40 hex characters"), "got: {err}");
     }
 
     #[test]
     fn policy_set_rejects_non_json() {
-        assert!(policy_set(b"not json").unwrap_err().contains("bad input"));
+        assert!(policy_set(b"not json", None).unwrap_err().contains("bad input"));
     }
 }
 
@@ -611,29 +605,29 @@ pub struct PolicyDelegateResp {
     pub audit_key: String,
 }
 
-pub fn policy_delegate(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn policy_delegate(input: &[u8], context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let req: PolicyDelegateReq =
         serde_json::from_slice(input).map_err(|e| format!("policy-delegate: bad input: {e}"))?;
     validate_caller_hex(&req.to).map_err(|e| format!("policy-delegate: {e}"))?;
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = policy_delegate_wasm(req)?;
+        let resp = policy_delegate_wasm(req, context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = req;
+        let _ = (req, context);
         Err("policy_delegate reaches the host and only runs on the wasm32 target".to_string())
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn policy_delegate_wasm(req: PolicyDelegateReq) -> Result<PolicyDelegateResp, String> {
-    // The delegator is whoever the node says is calling. Not the tenant
+fn policy_delegate_wasm(req: PolicyDelegateReq, context: Option<&[u8]>) -> Result<PolicyDelegateResp, String> {
+    // The delegator is whoever the node says authenticated. Not the tenant
     // check: any currently permitted caller may hand on a subset.
-    let mut entry = base_entry("policy-delegate", "consent", None)?;
+    let mut entry = base_entry("policy-delegate", "consent", None, context)?;
     let from = entry.caller_did.clone();
     let now = entry.at_secs;
 
@@ -706,12 +700,12 @@ mod delegate_input_tests {
     #[test]
     fn rejects_a_malformed_delegatee_before_reaching_the_host() {
         let input = serde_json::to_vec(&serde_json::json!({ "to": "not-a-did", "functions": ["vault-read"] })).unwrap();
-        assert!(policy_delegate(&input).unwrap_err().contains("40 hex characters"));
+        assert!(policy_delegate(&input, None).unwrap_err().contains("40 hex characters"));
     }
 
     #[test]
     fn rejects_non_json() {
-        assert!(policy_delegate(b"nope").unwrap_err().contains("bad input"));
+        assert!(policy_delegate(b"nope", None).unwrap_err().contains("bad input"));
     }
 
     #[test]
@@ -726,7 +720,50 @@ mod delegate_input_tests {
         })).unwrap();
         // Parses (unknown fields are ignored) and proceeds to the host
         // path, which on the native target reports it cannot run.
-        let err = policy_delegate(&input).unwrap_err();
+        let err = policy_delegate(&input, None).unwrap_err();
         assert!(err.contains("only runs on the wasm32 target"));
+    }
+}
+
+
+// ---------------------------------------------------------------------
+// Diagnostic: who does the node say is calling?
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct WhoamiResp {
+    pub tenant_did: String,
+    pub calling_user_did: Option<String>,
+    /// Who authenticated, resolved from the context: the agent on a
+    /// delegated call.
+    pub caller_did: Option<String>,
+    /// Whose data it is.
+    pub subject_did: Option<String>,
+    pub delegated: bool,
+    /// The node-minted context, as UTF-8 if it is text, verbatim.
+    pub context_utf8: Option<String>,
+    pub context_len: usize,
+}
+
+pub fn whoami(context: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let ids = identity::resolve(context).ok();
+        let resp = WhoamiResp {
+            tenant_did: hex::encode(tenant_context::tenant_did()),
+            calling_user_did: tenant_context::calling_user_did().map(|d| hex::encode(&d)),
+            caller_did: ids.as_ref().map(|i| i.caller.clone()),
+            subject_did: ids.as_ref().map(|i| i.subject.clone()),
+            delegated: ids.as_ref().map(|i| i.is_delegated()).unwrap_or(false),
+            context_utf8: context.map(|c| String::from_utf8_lossy(c).into_owned()),
+            context_len: context.map(|c| c.len()).unwrap_or(0),
+        };
+        serde_json::to_vec(&resp).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = context;
+        Err("whoami reaches the host and only runs on the wasm32 target".to_string())
     }
 }
