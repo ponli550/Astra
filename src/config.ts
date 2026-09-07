@@ -29,6 +29,37 @@ function required(name: string): string {
   return value.trim();
 }
 
+/** A T3N identity key is a 32-byte secp256k1 private key in hex. */
+const PRIVATE_KEY = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * Read a key and check its shape before anything tries to sign with it.
+ *
+ * Worth doing rather than letting the signer complain: an unfilled
+ * placeholder from the template reaches the SDK as a malformed key and
+ * comes back as "Invalid Ethereum private key" with the value redacted,
+ * which says nothing about which of the three keys is wrong or why.
+ */
+function requiredKey(name: string): string {
+  const value = required(name);
+
+  if (value === "0x..." || /^0x\.+$/.test(value) || /^0x?(your|xxx)/i.test(value)) {
+    throw new Error(
+      `${name} is still the placeholder from .env.example. Replace it with a real ` +
+        `key claimed for this identity from the T3N claim page.`,
+    );
+  }
+
+  if (!PRIVATE_KEY.test(value)) {
+    const hint = value.startsWith("0x")
+      ? `it is ${value.length} characters; a key is 66, being "0x" plus 64 hex digits`
+      : `it does not start with "0x"`;
+    throw new Error(`${name} is not a valid private key: ${hint}.`);
+  }
+
+  return value;
+}
+
 function optional(name: string): string | undefined {
   const value = process.env[name];
   return value && value.trim() !== "" ? value.trim() : undefined;
@@ -64,15 +95,15 @@ export const GRANT_TTL_SECS = Number(optional("GRANT_TTL_SECS") ?? "900");
 export const keys = {
   /** Tenant developer key. Owns the contract and pays to register it. */
   get tenant(): string {
-    return required("T3N_API_KEY");
+    return requiredKey("T3N_API_KEY");
   },
   /** The agent's own key. Never the tenant's. */
   get agent(): string {
-    return required("AGENT_KEY");
+    return requiredKey("AGENT_KEY");
   },
   /** The data owner's key. Stands in for a real user in this demo. */
   get user(): string {
-    return required("USER_KEY");
+    return requiredKey("USER_KEY");
   },
 };
 
