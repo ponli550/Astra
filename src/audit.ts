@@ -18,6 +18,8 @@ interface AuditEntry {
   contract_id: number;
   tenant_did: string;
   caller_did: string;
+  /** Whose data it is; equal to caller_did on a self-call. Absent on entries older than 0.5.1. */
+  subject_did?: string;
   action: string;
   record_id: string;
   purpose: string;
@@ -52,6 +54,9 @@ async function main() {
     console.log(`  action   ${entry.action}`);
     console.log(`  record   ${entry.record_id}`);
     console.log(`  caller   did:t3n:${entry.caller_did}`);
+    if (entry.subject_did && entry.subject_did !== entry.caller_did) {
+      console.log(`  for      did:t3n:${entry.subject_did}   (delegated)`);
+    }
     console.log(`  contract ${entry.contract_id}`);
     if (entry.purpose) console.log(`  purpose  ${entry.purpose}`);
     if (entry.reason) console.log(`  reason   ${entry.reason}`);

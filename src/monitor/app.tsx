@@ -159,6 +159,9 @@ function Trail({ snapshot }: { snapshot: Snapshot }) {
             <Text> {entry.action} </Text>
             <Text dimColor>{entry.record_id}</Text>
           </Box>
+          {entry.subject_did !== undefined && entry.subject_did !== entry.caller_did && (
+            <Text dimColor>      by {entry.caller_did.slice(0, 8)}... for {entry.subject_did.slice(0, 8)}...</Text>
+          )}
           {entry.reason !== "" && (
             <Text dimColor>      {entry.reason}</Text>
           )}

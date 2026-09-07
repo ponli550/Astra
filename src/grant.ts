@@ -16,10 +16,24 @@ import {
   MODE,
   describeMode,
 } from "./config.js";
-import { canonicalName, openCallerSession, openOwnerSession } from "./session.js";
+import { openCaller } from "./caller.js";
+import { canonicalName, openOwnerSession } from "./session.js";
 
-/** Functions the caller is allowed to invoke. Read-only, deliberately. */
-export const GRANTED_FUNCTIONS = ["vault-read", "audit-list"];
+/**
+ * Functions the platform grant names. Read-only by default; override with
+ * GRANT_FUNCTIONS="vault-read,audit-list,policy-delegate" for an agent
+ * that is allowed to hand permission on.
+ *
+ * This is the PLATFORM layer. On a delegated call, where the caller is
+ * not the subject, the node checks this grant per function before the
+ * contract runs and refuses with agent_auth_not_found. It is flat: only
+ * the owner can issue it, so the chain lives in the contract's policy on
+ * top of it. Both layers must pass.
+ */
+export const GRANTED_FUNCTIONS = (process.env["GRANT_FUNCTIONS"] ?? "vault-read,audit-list")
+  .split(",")
+  .map((f) => f.trim())
+  .filter(Boolean);
 
 /** Functions deliberately withheld, so the scope is observably real. */
 export const WITHHELD_FUNCTIONS = ["vault-put"];
@@ -33,7 +47,8 @@ async function main() {
   }
 
   // The caller's DID can only be learned by authenticating as it.
-  const caller = await openCallerSession();
+  // CALLER=second selects agent B as the grantee.
+  const caller = await openCaller();
   const owner = await openOwnerSession();
 
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
@@ -49,7 +64,12 @@ async function main() {
     // tenant's own maps and makes no outbound call.
     scopes: [],
     allowed_hosts: [],
-    version_req: version,
+    // Unpinned by default. A grant pinned to the exact version at issue
+    // time silently stops matching on the next redeploy, and every
+    // delegated call then fails before dispatch with agent_auth_not_found.
+    // The reference demo grants unpinned for this reason. Set
+    // GRANT_PIN_VERSION=1 to pin deliberately.
+    ...(process.env["GRANT_PIN_VERSION"] ? { version_req: version } : {}),
     // The short-lived part. Expiry is enforced by the host at read
     // time, so the grant stops working on its own.
     window: {
@@ -107,7 +127,7 @@ async function main() {
       functions: [AUDIT_FUNCTION],
       scopes: [],
       allowed_hosts: [],
-      version_req: version,
+      ...(process.env["GRANT_PIN_VERSION"] ? { version_req: version } : {}),
     };
     await owner.client.updateMemberDelegation(ownerGrant);
     console.log(`self-grant written for the owner's console: ${AUDIT_FUNCTION}`);

@@ -10,7 +10,7 @@
 /// third-party API key and no egress grant. Adding an outbound call
 /// later means adding the import here AND adding the host to the
 /// delegating user's `allowed_hosts`.
-package z:tenant-consent@0.4.1;
+package z:tenant-consent@0.5.1;
 
 world tenant-consent {
     import host:tenant/tenant-context@1.0.0;
@@ -73,4 +73,11 @@ interface contracts {
     /// Output (JSON): { status, reason?, version, from, to, functions,
     ///                  valid_until_secs, depth, audit_key }
     policy-delegate: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Diagnostic: what the node tells this contract about who is calling.
+    /// Returns the tenant DID, the calling-user DID from tenant-context, and
+    /// the node-minted context bytes verbatim, so the exact shape the host
+    /// sends on self and delegated calls can be seen rather than assumed.
+    /// Output (JSON): { tenant_did, calling_user_did, context_utf8, context_len }
+    whoami: func(req: generic-input) -> result<list<u8>, string>;
 }

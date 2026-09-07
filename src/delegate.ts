@@ -15,7 +15,7 @@
  */
 import { GRANT_TTL_SECS } from "./config.js";
 import { openCaller } from "./caller.js";
-import { resolveGrantSubject } from "./session.js";
+import { openSession, resolveGrantSubject } from "./session.js";
 
 interface DelegateResponse {
   status: "served" | "denied";
@@ -33,10 +33,29 @@ function didBody(did: string): string {
   return did.startsWith("did:t3n:") ? did.slice("did:t3n:".length) : did;
 }
 
+/**
+ * The delegatee's DID. An eth-key agent B has no DID in configuration,
+ * because DIDs are read back from a session and never derived, so open
+ * one to learn it. A minted agent B has its DID recorded at mint time.
+ * The eth key takes priority: it is the one that arrives funded.
+ */
+async function delegateeDid(): Promise<string> {
+  const key = process.env["AGENT2_KEY"];
+  if (key && !/^0x\.+$/.test(key)) {
+    const b = await openSession("agent B (eth key)", key);
+    return b.did;
+  }
+  const minted = process.env["AGENT2_DID"];
+  if (minted) return minted;
+  throw new Error(
+    "No second agent. Set AGENT2_KEY to a key claimed with another work email, " +
+      "or mint one with: npm run agent:mint -- second",
+  );
+}
+
 async function main() {
   const widen = process.argv.includes("widen");
-  const to = process.env["AGENT2_DID"];
-  if (!to) throw new Error("AGENT2_DID is not set. Mint it with: npm run agent:mint -- second");
+  const to = await delegateeDid();
 
   const caller = await openCaller();
   const subject = await resolveGrantSubject();

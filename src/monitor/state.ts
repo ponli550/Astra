@@ -19,6 +19,8 @@ export interface AuditEntry {
   at_secs: number;
   contract_id: number;
   caller_did: string;
+  /** Whose data it is; equal to caller_did on a self-call. Absent on entries older than 0.5.1. */
+  subject_did?: string;
   action: string;
   record_id: string;
   purpose: string;

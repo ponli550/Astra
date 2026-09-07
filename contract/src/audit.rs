@@ -21,8 +21,11 @@ pub struct AuditEntry {
     pub contract_id: u32,
     /// Hex of the tenant DID that owns the data.
     pub tenant_did: String,
-    /// Hex of the calling user DID the node bound to the execution.
+    /// Hex of whoever authenticated: the agent on a delegated call.
     pub caller_did: String,
+    /// Hex of whose data it is. Equal to `caller_did` on a self-call.
+    #[serde(default)]
+    pub subject_did: String,
     /// WIT function name that ran.
     pub action: String,
     /// Vault record touched.
@@ -68,20 +71,20 @@ pub fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(100).clamp(1, 1000)
 }
 
-pub fn audit_list(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn audit_list(input: &[u8], context: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let req: AuditListReq =
         serde_json::from_slice(input).map_err(|e| format!("audit-list: bad input: {e}"))?;
     let limit = clamp_limit(req.limit);
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resp = audit_list_wasm(limit)?;
+        let resp = audit_list_wasm(limit, context)?;
         serde_json::to_vec(&resp).map_err(|e| e.to_string())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = limit;
+        let _ = (limit, context);
         Err("audit_list reaches the host and only runs on the wasm32 target".to_string())
     }
 }
@@ -100,26 +103,25 @@ use crate::host::{
 /// else only if consent names `audit-list` for them, because the trail
 /// carries record ids and stated purposes, which are themselves data.
 #[cfg(target_arch = "wasm32")]
-fn may_read_trail() -> Result<(), String> {
-    let caller = match tenant_context::calling_user_did() {
-        Some(did) => hex::encode(&did),
-        None => return Err("audit-list: no calling user bound to this execution".to_string()),
-    };
+fn may_read_trail(context: Option<&[u8]>) -> Result<(), String> {
+    // Whoever authenticated, not the subject: an agent acting for the
+    // owner must not inherit the owner's unconditional right to the trail.
+    let ids = crate::identity::resolve(context).map_err(|e| format!("audit-list: {e}"))?;
     let tenant = hex::encode(tenant_context::tenant_did());
-    if caller.eq_ignore_ascii_case(&tenant) {
+    if ids.caller.eq_ignore_ascii_case(&tenant) {
         return Ok(());
     }
     let gate = crate::policy::load()?;
-    crate::policy::evaluate(&gate, &caller, "audit-list", tenant_context::cluster_timestamp_secs())
+    crate::policy::evaluate(&gate, &ids.caller, "audit-list", tenant_context::cluster_timestamp_secs())
         .map_err(|d| format!("audit-list: {}", d.reason()))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn audit_list_wasm(limit: u32) -> Result<AuditListResp, String> {
+fn audit_list_wasm(limit: u32, context: Option<&[u8]>) -> Result<AuditListResp, String> {
     // Unlike a vault read, a refused trail read is an error rather than
     // a recorded denial: a caller with no standing to see the trail has
     // no business leaving marks in it either.
-    may_read_trail()?;
+    may_read_trail(context)?;
 
     let map = crate::map_name(crate::AUDIT_TAIL);
 
@@ -191,7 +193,7 @@ mod tests {
 
     #[test]
     fn audit_list_rejects_non_json() {
-        let err = audit_list(b"not json").unwrap_err();
+        let err = audit_list(b"not json", None).unwrap_err();
         assert!(err.contains("bad input"), "got: {err}");
     }
 

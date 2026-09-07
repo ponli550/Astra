@@ -20,7 +20,7 @@
 
 extern crate alloc;
 
-pub const CONTRACT_VERSION: &str = "0.4.1";
+pub const CONTRACT_VERSION: &str = "0.5.1";
 
 wit_bindgen::generate!({
     world: "tenant-consent",
@@ -33,6 +33,7 @@ wit_bindgen::generate!({
 });
 
 pub mod audit;
+pub mod identity;
 pub mod policy;
 pub mod vault;
 
@@ -44,14 +45,14 @@ impl exports::z::tenant_consent::contracts::Guest for Component {
         req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         let input = req.input.ok_or("vault-put: missing input")?;
-        vault::vault_put(&input)
+        vault::vault_put(&input, req.context.as_deref())
     }
 
     fn vault_read(
         req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         let input = req.input.ok_or("vault-read: missing input")?;
-        vault::vault_read(&input)
+        vault::vault_read(&input, req.context.as_deref())
     }
 
     fn audit_list(
@@ -59,27 +60,33 @@ impl exports::z::tenant_consent::contracts::Guest for Component {
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         // audit-list takes an optional body: an absent input means "defaults".
         let input = req.input.unwrap_or_else(|| b"{}".to_vec());
-        audit::audit_list(&input)
+        audit::audit_list(&input, req.context.as_deref())
     }
 
     fn policy_set(
         req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         let input = req.input.ok_or("policy-set: missing input")?;
-        vault::policy_set(&input)
+        vault::policy_set(&input, req.context.as_deref())
     }
 
     fn policy_get(
-        _req: exports::z::tenant_consent::contracts::GenericInput,
+        req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
-        vault::policy_get()
+        vault::policy_get(req.context.as_deref())
     }
 
     fn policy_delegate(
         req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         let input = req.input.ok_or("policy-delegate: missing input")?;
-        vault::policy_delegate(&input)
+        vault::policy_delegate(&input, req.context.as_deref())
+    }
+
+    fn whoami(
+        req: exports::z::tenant_consent::contracts::GenericInput,
+    ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
+        vault::whoami(req.context.as_deref())
     }
 }
 

@@ -29,7 +29,7 @@
  */
 import { getContractVersion, getNodeUrl, invoke, setEnvironment } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID, T3N_ENV } from "./config.js";
-import { canonicalName, openCallerSession, openSession } from "./session.js";
+import { canonicalName, openCallerSession, openSession, openTenantSession } from "./session.js";
 
 export interface Caller {
   /** Which transport answered. */
@@ -101,10 +101,13 @@ export async function openCaller(): Promise<Caller> {
   // work email. Selected by CALLER=second when no bearer token exists
   // for that slot.
   const which = (process.env["CALLER"] ?? "").toLowerCase();
+  const wantsTenant = which === "tenant" || which === "owner" || which === "self";
   const wantsSecond = which === "second" || which === "agent2" || which === "b";
   const secondKey = process.env["AGENT2_KEY"];
-  const session =
-    wantsSecond && secondKey && !/^0x\.+$/.test(secondKey)
+  const session = wantsTenant
+    ? // Forced: the owner's own session, whatever agent keys exist.
+      await openTenantSession()
+    : wantsSecond && secondKey && !/^0x\.+$/.test(secondKey)
       ? await openSession("agent B (eth key)", secondKey)
       : await openCallerSession();
   const { contract, version } = await contractRef();
