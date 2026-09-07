@@ -16,6 +16,12 @@
  * Idempotency: an organisation is minted on every call to org create,
  * so this refuses to run if ORG_DID is already set. Clear it to mint
  * another, knowingly.
+ *
+ * A second agent for the delegation-chain demo reuses the organisation:
+ *
+ *   npm run agent:mint -- second
+ *
+ * which writes AGENT2_DID, AGENT2_API_KEY and AGENT2_KEY_ID.
  */
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
@@ -52,23 +58,39 @@ function str(o: unknown, ...keysToTry: string[]): string {
 }
 
 async function main() {
-  if (process.env["ORG_DID"]) {
+  const second = process.argv.includes("second");
+  const prefix = second ? "AGENT2" : "AGENT";
+  const name = second ? (process.env["AGENT2_NAME"] ?? "Vault Reviewer") : AGENT_NAME;
+
+  if (process.env[`${prefix}_API_KEY`]) {
     throw new Error(
-      `ORG_DID is already set. Minting is not idempotent: every org create mints a new ` +
-        `organisation. Clear ORG_DID and AGENT_API_KEY to mint again, knowingly.`,
+      `${prefix}_API_KEY is already set. Minting is not idempotent. Clear it to mint ` +
+        `another agent, knowingly.`,
     );
   }
 
-  console.log(`minting organisation "${ORG_NAME}"...`);
-  const org = cli(["org", "create", "--name", ORG_NAME]);
-  const orgDid = str(org, "organisationDid", "orgDid", "did");
-  await setEnv({ ORG_DID: orgDid });
-  console.log(`  org  ${orgDid}   (saved to .env)`);
+  let orgDid = process.env["ORG_DID"];
+  if (second) {
+    if (!orgDid) throw new Error("ORG_DID is not set. Mint the first agent before the second.");
+    console.log(`reusing organisation ${orgDid}`);
+  } else {
+    if (orgDid) {
+      throw new Error(
+        `ORG_DID is already set. Minting is not idempotent: every org create mints a new ` +
+          `organisation. Clear ORG_DID and AGENT_API_KEY to mint again, knowingly.`,
+      );
+    }
+    console.log(`minting organisation "${ORG_NAME}"...`);
+    const org = cli(["org", "create", "--name", ORG_NAME]);
+    orgDid = str(org, "organisationDid", "orgDid", "did");
+    await setEnv({ ORG_DID: orgDid });
+    console.log(`  org  ${orgDid}   (saved to .env)`);
+  }
 
-  console.log(`minting agent "${AGENT_NAME}" owned by that organisation...`);
+  console.log(`minting agent "${name}" owned by that organisation...`);
   // No --card: the network hosts a default card that names the agent's
   // own DID. A hand-written card here would have to know that DID first.
-  const agent = cli(["agent", "create", "--org", orgDid, "--name", AGENT_NAME]);
+  const agent = cli(["agent", "create", "--org", orgDid, "--name", name]);
   const agentDid = str(agent, "did", "agentDid");
   const apiKey = str(agent, "apiKey");
   const keyId = str(agent, "keyId");
@@ -76,7 +98,11 @@ async function main() {
   // Persist BEFORE printing. The key is shown once by the network and
   // never again; if this process died after printing but before saving,
   // the identity would be unusable.
-  await setEnv({ AGENT_DID: agentDid, AGENT_API_KEY: apiKey, AGENT_KEY_ID: keyId });
+  await setEnv({
+    [`${prefix}_DID`]: agentDid,
+    [`${prefix}_API_KEY`]: apiKey,
+    [`${prefix}_KEY_ID`]: keyId,
+  });
 
   console.log(`  agent ${agentDid}   (saved to .env)`);
   console.log(`  key id ${keyId}   (safe to log; the secret half was saved, not printed)`);
