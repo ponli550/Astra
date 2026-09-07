@@ -112,6 +112,19 @@ function ConsentPanel({
           {formatRemaining(remaining)} [{progressBar(remaining, policyTotal)}]
         </Text>
       )}
+      {policy.delegations.length > 0 && (
+        <Box flexDirection="column">
+          <Text dimColor>chain</Text>
+          {policy.delegations.map((d) => (
+            <Text key={`${d.from}-${d.to}`}>
+              <Text dimColor>  {d.from.slice(0, 8)}... </Text>
+              <Text>-&gt; {d.to.slice(0, 8)}...  </Text>
+              <Text color="cyan">[{d.functions.join(", ")}]</Text>
+              <Text dimColor>  {formatRemaining(secondsRemaining(d.validUntilSecs, nowSecs))}</Text>
+            </Text>
+          ))}
+        </Box>
+      )}
       <Text dimColor>
         grant   {grant.present ? grant.functions.join(", ") : "none"} (intent, not the gate)
       </Text>
