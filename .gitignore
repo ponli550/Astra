@@ -1,0 +1,14 @@
+# Secrets. `*env` also covers .env, .env.local and similar.
+*env
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Rust
+contract/target/
+target/
+
+# macOS
+.DS_Store
