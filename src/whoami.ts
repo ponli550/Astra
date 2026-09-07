@@ -4,26 +4,22 @@
  *
  *   npm run whoami
  *
- * Two keys are enough. The claim page issues one per work email, and
- * the official reference runs its grant as the tenant with the grant
- * subject set to the tenant's identity, so the data owner and the tenant
- * can be one identity.
- *
- * The agent is the separation that matters. An identity granting itself
- * is a self-grant, which demonstrates nothing, so this refuses to
- * continue if the agent is not distinct.
+ * One funded identity is enough. The claim page issues one key and one
+ * DID per work email, and a delegated call is billed to the
+ * authenticated caller, so an unfunded second identity fails every call
+ * on credit before consent is ever consulted. With one identity the
+ * demo runs as a self-grant, which the platform documents for direct
+ * calls.
  */
 import { getNodeUrl } from "@terminal3/t3n-sdk";
-import { T3N_ENV, hasSeparateOwner } from "./config.js";
+import { MODE, T3N_ENV, describeMode } from "./config.js";
 import { asTenantMe } from "./narrow.js";
-import { openAgentSession, openOwnerSession, openTenantClient } from "./session.js";
+import { openCallerSession, openOwnerSession, openTenantClient } from "./session.js";
 
 async function main() {
   console.log(`environment: ${T3N_ENV}`);
   console.log(`node:        ${getNodeUrl()}`);
-  console.log(
-    `identities:  ${hasSeparateOwner ? "three, with a separate data owner" : "two, tenant also acts as the data owner"}`,
-  );
+  console.log(`mode:        ${describeMode()}`);
 
   const { session: tenantSession, tenant } = await openTenantClient();
   const me = asTenantMe(await tenant.tenant.me());
@@ -36,37 +32,42 @@ async function main() {
 
   const owner = await openOwnerSession();
   console.log(`\nowner   ${owner.did}`);
-  if (owner.did === tenantSession.did) {
-    console.log(`        the tenant identity, acting as the data owner`);
-  } else {
-    console.log(`        address ${owner.address}`);
-  }
+  console.log(
+    owner.did === tenantSession.did
+      ? `        the tenant identity, acting as the data owner`
+      : `        address ${owner.address}`,
+  );
 
-  const agent = await openAgentSession();
-  console.log(`\nagent   ${agent.did}`);
-  console.log(`        address ${agent.address}`);
+  const caller = await openCallerSession();
+  console.log(`\ncaller  ${caller.did}`);
+  console.log(
+    caller.did === owner.did
+      ? `        the owner identity, calling its own contract`
+      : `        address ${caller.address}`,
+  );
 
-  if (agent.did === owner.did) {
+  if (MODE === "delegated" && caller.did === owner.did) {
     throw new Error(
-      "the agent and the data owner resolve to the same identity.\n" +
-        "AGENT_KEY must be its own key. An identity granting itself is a " +
-        "self-grant, which proves nothing about delegated consent, and an " +
-        "agent's credit balance is separate and starts at zero.",
-    );
-  }
-  if (agent.did === tenantSession.did) {
-    throw new Error(
-      "the agent and the tenant resolve to the same identity.\n" +
-        "AGENT_KEY must be its own key, with its own credits.",
+      "AGENT_KEY is set but resolves to the same identity as the data owner.\n" +
+        "A delegated run needs a distinct agent key. Clear AGENT_KEY to run as a " +
+        "self-grant instead.",
     );
   }
 
-  console.log(`\nthe agent is distinct from the data owner. ready to deploy.`);
-  if (!hasSeparateOwner) {
+  console.log(`\nready to deploy.`);
+
+  if (MODE === "self") {
     console.log(
-      `\nNote: with two keys the demo reads as a developer delegating to their\n` +
-        `own agent, not a third party delegating to someone else's. The\n` +
-        `enforcement and the audit trail are the same, so say it that way.`,
+      `\nOne identity, so the grant is a self-grant. That still shows the\n` +
+        `contract refusing a call it cannot attribute, every attempt recorded\n` +
+        `with provenance set inside the enclave, and the grant being\n` +
+        `load-bearing: withdraw it and calls that worked stop working.\n` +
+        `\nWhat it does not show is a second party receiving access it did not\n` +
+        `have. That needs a funded agent identity, which is a second work\n` +
+        `email on the claim page or a request to devrel@terminal3.io. Do not\n` +
+        `generate a keypair locally for this: it authenticates, but starts at\n` +
+        `zero credits, and a delegated call bills the caller, so every step\n` +
+        `would fail on credit rather than on consent.`,
     );
   }
 }

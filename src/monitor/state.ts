@@ -10,7 +10,7 @@
  */
 import { getContractVersion, getNodeUrl, type BoundGrant } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "../config.js";
-import { canonicalName, openAgentSession, openOwnerSession } from "../session.js";
+import { canonicalName, openCallerSession, openOwnerSession } from "../session.js";
 import type { Session } from "../session.js";
 
 export interface AuditEntry {
@@ -59,7 +59,7 @@ async function connect() {
   if (!DECLARED_TENANT_DID) {
     throw new Error("DID is not set. It names the tenant that owns the contract.");
   }
-  const [agent, owner] = await Promise.all([openAgentSession(), openOwnerSession()]);
+  const [agent, owner] = await Promise.all([openCallerSession(), openOwnerSession()]);
   const contract = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
   const version = await getContractVersion(getNodeUrl(), contract);
   session = { agent, owner, contract, version };

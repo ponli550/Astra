@@ -101,11 +101,10 @@ export const keys = {
     return requiredKey("T3N_API_KEY");
   },
   /**
-   * The agent's own key. Never the tenant's.
+   * A separate agent key. Optional; see `MODE`.
    *
-   * This is the one separation that cannot be collapsed. An identity
-   * granting itself is a self-grant, and a self-grant demonstrates
-   * nothing about delegated consent.
+   * Never the tenant's. When a distinct funded agent identity exists,
+   * this is what makes the demo show delegation to a second party.
    */
   get agent(): string {
     return requiredKey("AGENT_KEY");
@@ -116,34 +115,74 @@ export const keys = {
   },
 };
 
+/** True when the variable holds a real value rather than a template stub. */
+function filled(name: string): boolean {
+  const value = optional(name);
+  if (value === undefined) return false;
+  if (value === "0x..." || /^0x\.+$/.test(value)) return false;
+  return true;
+}
+
 /**
  * Whether a third identity acts as the data owner.
  *
- * The claim page issues one key per work email, so three identities
- * means three addresses. Two is enough: the official reference runs its
- * grant as the tenant and sets the grant subject to the tenant's
- * identity, so in that model the data owner is the tenant developer.
- *
- * When there is no third key the tenant plays both roles. The demo then
- * reads as a developer delegating to their own agent rather than a third
- * party delegating to someone else's. The mechanism, the enforcement and
- * the audit trail are identical, so this costs narration, not substance.
+ * The claim page issues one key and one DID per work email, so extra
+ * identities mean extra addresses. When there is no owner key the tenant
+ * plays that role, which is how the official reference is written: it
+ * runs its grant as the tenant and sets the grant subject to the
+ * tenant's identity.
  */
 export const hasSeparateOwner = ((): boolean => {
-  const value = optional("USER_KEY");
-  if (value === undefined) return false;
-  // An unreplaced template placeholder means "not set", not "set badly".
-  if (value === "0x..." || /^0x\.+$/.test(value)) return false;
-  return true;
+  if (!filled("USER_KEY")) return false;
+  return optional("USER_KEY") !== optional("T3N_API_KEY");
 })();
 
 /**
- * The tenant DID from `.env`, used only to cross-check the value the
- * session returns. The session is always the source of truth: a
- * hardcoded or hand-derived DID is the most common cause of
- * `tenant not found`.
+ * Whether a separate agent identity makes the calls.
+ *
+ * A key that merely repeats another role's key is not a separate
+ * identity. Pasting the one claimed key into every slot is the natural
+ * thing to do when the claim page gave you one, so it is treated as
+ * "no separate agent" rather than reported as a mistake.
+ *
+ * A locally generated keypair is not a substitute either. It
+ * authenticates and the network mints a DID for it, but it starts with
+ * zero credits, and the host bills a delegated call to the
+ * authenticated caller rather than to the subject. So an unfunded agent
+ * fails every call on credit before consent is ever consulted, which
+ * looks like broken guardrails rather than a funding problem.
  */
-export const DECLARED_TENANT_DID = optional("DID");
+export const hasSeparateAgent = ((): boolean => {
+  if (!filled("AGENT_KEY")) return false;
+  const agent = optional("AGENT_KEY");
+  return agent !== optional("T3N_API_KEY") && agent !== optional("USER_KEY");
+})();
+
+/**
+ * How the demo runs.
+ *
+ * `delegated` needs a second funded identity and shows an agent
+ * receiving exactly what it was granted.
+ *
+ * `self` runs on one identity, which grants itself. The platform
+ * documents this for direct calls: the grantee is the caller's own
+ * identity. It still shows that the contract refuses an unattributable
+ * call, that every attempt is recorded with provenance set inside the
+ * enclave, and that the grant is load-bearing, because withdrawing it
+ * stops calls that worked a moment earlier. What it cannot show is a
+ * second party that started with no access.
+ */
+export const MODE: "delegated" | "self" = hasSeparateAgent ? "delegated" : "self";
+
+/** One-line description of the arrangement, for scripts to print. */
+export function describeMode(): string {
+  if (MODE === "delegated") {
+    return hasSeparateOwner
+      ? "delegated, with a separate data owner and agent"
+      : "delegated, tenant acts as the data owner";
+  }
+  return "self-grant, one identity is tenant, data owner and caller";
+}
 
 /** Vault record the deploy step seeds and the invoke step reads back. */
 export const DEMO_RECORD = "medical-1";
@@ -154,18 +193,38 @@ export const DEMO_RECORD = "medical-1";
  * This is the single most important field on an invocation and the
  * easiest to omit. A call that does not name a subject is treated as a
  * self-call by the caller's own identity, so the node looks up the
- * agent's own grants, which are empty, instead of the grants the data
- * owner signed. It surfaces as a permission or egress denial that reads
- * like a misconfigured allowlist, while the real problem is that the
- * lookup subject is wrong. Grant read-backs look correct throughout,
- * because a diagnostic read is authenticated as the granting identity
- * and therefore checks the right place.
+ * caller's own grants instead of the grants the data owner signed. It
+ * surfaces as a permission or egress denial that reads like a
+ * misconfigured allowlist, while the real problem is that the lookup
+ * subject is wrong. Grant read-backs look correct throughout, because a
+ * diagnostic read is authenticated as the granting identity and
+ * therefore checks the right place.
  *
- * In this project the data owner is the user, so the subject is the
- * user's DID. `npm run grant` prints the line to paste here.
- *
- * A production agent receives this DID out of band and never holds the
- * user's key. When it is absent, the demo scripts fall back to
- * authenticating with `USER_KEY` purely to resolve it, and say so.
+ * `npm run grant` prints the line to set here.
  */
 export const DECLARED_USER_DID = optional("USER_DID");
+
+/**
+ * A contract id from an earlier deploy.
+ *
+ * Registration returns the id, but nothing looks it up afterwards. When
+ * the current version is already registered, this is the only way a
+ * later run can re-point map rules at the right contract.
+ */
+export const KNOWN_CONTRACT_ID = ((): number | undefined => {
+  const raw = optional("CONTRACT_ID");
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`CONTRACT_ID must be a positive integer, got "${raw}".`);
+  }
+  return parsed;
+})();
+
+/**
+ * The tenant DID from the environment, used to name the contract and to
+ * cross-check the value the session returns. The session is always the
+ * source of truth: a hardcoded or hand-derived DID is the most common
+ * cause of `tenant not found`.
+ */
+export const DECLARED_TENANT_DID = optional("DID");
