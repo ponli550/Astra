@@ -102,27 +102,37 @@ async function main() {
   //
   // Asserted, not merely reported. The contract now evaluates the policy
   // itself, so this is a real gate rather than a statement of intent.
-  console.log(`\nvault-put, which the consent policy does not cover:`);
-  const smuggled = await call<VaultPutResponse>("vault-put", {
-    record_id: "probe-unauthorised",
-    payload: "written by a call consent does not cover",
-  });
-  console.log(`  status    ${smuggled.status}`);
-  console.log(`  reason    ${smuggled.reason ?? "(none)"}`);
-  console.log(`  audit_key ${smuggled.audit_key}`);
-  if (smuggled.status !== "denied") {
-    console.error(
-      `  UNEXPECTED: the write was permitted. The policy names only ` +
-        `${"vault-read"} and audit-list, so this should have been refused ` +
-        `inside the enclave.`,
-    );
-    process.exitCode = 1;
-  } else {
-    console.log(
-      `\n  Refused inside the enclave, and the refusal is recorded. This is the\n` +
-        `  check the delegation grant does not make for a contract with no\n` +
-        `  egress, which is why the contract makes it.`,
-    );
+  console.log(`\nvault-put, which consent does not cover:`);
+  try {
+    const smuggled = await call<VaultPutResponse>("vault-put", {
+      record_id: "probe-unauthorised",
+      payload: "written by a call consent does not cover",
+    });
+    console.log(`  status    ${smuggled.status}`);
+    console.log(`  reason    ${smuggled.reason ?? "(none)"}`);
+    console.log(`  audit_key ${smuggled.audit_key}`);
+    if (smuggled.status !== "denied") {
+      console.error(`  UNEXPECTED: the write was permitted.`);
+      process.exitCode = 1;
+    } else {
+      console.log(
+        `\n  Refused by the CONTRACT, inside the enclave, and recorded. On a self-call\n` +
+          `  this is the only layer that decides.`,
+      );
+    }
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/agent_auth_not_found|not permitted to act on behalf/i.test(detail)) {
+      console.log(`  refused by the PLATFORM before the contract ran:`);
+      console.log(`  ${detail.split("[")[0]?.trim()}`);
+      console.log(
+        `\n  On a delegated call the node checks the owner's grant per function\n` +
+          `  first. This never reached the contract, so it is not in the trail:\n` +
+          `  two layers, and either one can refuse.`,
+      );
+    } else {
+      throw error;
+    }
   }
 
   console.log(`\nnext: npm run audit`);
