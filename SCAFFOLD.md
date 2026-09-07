@@ -173,6 +173,30 @@ key or the data owner's key. A refusal comes back as a readable tool result
 rather than an exception, because one thrown error can take down an agent loop
 on a tool's first failure.
 
+## Delegated mode and the caller abstraction
+
+Two transports exist. An Ethereum key opens an encrypted session; a minted
+org-owned agent presents an opaque bearer token on a stateless invoke. Every
+script, the tool server and the console ask `openCaller()` and never care which
+answered. Selection is configuration:
+
+| Setting | Who calls |
+| --- | --- |
+| `AGENT_API_KEY` set | agent A, bearer token |
+| `CALLER=second` | agent B, bearer token |
+| `CALLER=tenant` | the owner's own session, regardless of agent keys |
+| otherwise | the owner's own session |
+
+`npm run agent:mint` provisions an organisation and agent A, persisting the
+one-time credential before printing anything. `npm run agent:mint -- second`
+adds agent B to the same organisation.
+
+Minted agents start at zero balance and every call bills the caller, so their
+calls fail with `InsufficientCredit` until Terminal 3 grants credits. The error
+surfaces as a generic 403 the SDK scrubs to "forbidden". The `required` figure
+in it is a 10,000-token per-call reservation, not the charge, so an agent with
+less than that cannot make a single call however cheap the call is.
+
 ## The owner's console
 
 Run this beside OpenCode. The agent's own account of what it did sits on one
@@ -218,9 +242,10 @@ decision to make.
 | --- | --- |
 | `vault-read` | Read a record, gated by the consent policy. Audits the attempt either way. |
 | `vault-put` | Write a record. Consent deliberately does not cover it, so it is refused. |
-| `audit-list` | Enumerate audit entries in order, with a count of any that could not be decoded. |
-| `policy-set` | Replace the consent policy. Tenant identity only, and audited. |
-| `policy-get` | Read the policy in force, with the cluster time it was judged against. |
+| `audit-list` | Enumerate audit entries. The owner always; anyone else only if consent names it. |
+| `policy-set` | Replace the consent policy. Tenant identity only, clears every chain, audited. |
+| `policy-get` | Read the policy in force, including delegations, against the cluster clock. |
+| `policy-delegate` | Hand a subset of one's own permission to another identity. Widening refused. |
 
 ## Things that will bite you
 
