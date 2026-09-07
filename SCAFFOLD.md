@@ -107,6 +107,19 @@ npm run whoami            # confirms the identities before spending credits
 
 ## Run
 
+One command runs the whole sequence in the order that makes the argument:
+
+```bash
+npm run demo
+```
+
+It takes about seventy seconds. The pacing is deliberate, because each step
+makes metered calls and the node enforces a per-minute fuel quota per tenant,
+so running the steps flat out trips a quota error part way through and reads as
+the guardrails failing. Set `DEMO_PAUSE` to change it.
+
+The individual steps, if you want to drive them yourself:
+
 ```bash
 npm run contract:build    # cargo -> wasm32-wasip2 component
 npm run contract:test     # 12 unit tests, native target

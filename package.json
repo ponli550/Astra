@@ -7,6 +7,7 @@
   "scripts": {
     "whoami": "tsx src/whoami.ts",
     "deploy": "tsx src/deploy.ts",
+    "demo": "./demo.sh",
     "policy": "tsx src/policy.ts show",
     "policy:allow": "tsx src/policy.ts allow",
     "policy:deny": "tsx src/policy.ts deny",
