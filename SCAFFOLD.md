@@ -27,6 +27,8 @@ audit entry.
 | `contract/wit/world.wit` | Exported functions plus the host capabilities imported |
 | `contract/wit/deps/` | Vendored host interface definitions |
 | `src/` | TypeScript orchestration, one script per step |
+| `src/mcp/` | Tool server that lets an agent drive the contract |
+| `opencode.jsonc` | Registers the tool server with OpenCode |
 
 The contract imports only `tenant-context`, `logging` and `kv-store`, so it
 links against the base tenant world. There is no outbound HTTP, which means no
@@ -60,6 +62,39 @@ npm run revoke            # remove the grant; invoke fails until you re-grant
 
 `npm run contract:wit` prints the component's interface if you want to confirm
 what it imports and exports.
+
+## Driving it with an agent
+
+The scripts above prove the guardrails work, but they call the contract in a
+fixed order, so they demonstrate enforcement rather than an agent subject to
+it. The tool server closes that gap: it exposes the contract's functions over
+the Model Context Protocol, so an existing agent drives them.
+
+```bash
+npm run mcp:probe    # verify the tool surface; needs no credentials
+opencode             # the tools appear automatically, see opencode.jsonc
+```
+
+No model key is required. OpenCode ships several models at no cost, listed by
+`opencode models`, and `opencode mcp list` should show the server connected.
+Any client that speaks the protocol works, so this is not tied to OpenCode.
+
+| Tool | Purpose |
+| --- | --- |
+| `vault_status` | Which identity the agent acts as, and under whose grant |
+| `vault_read` | Retrieve a record, subject to the grant |
+| `audit_list` | Read the enclave's record of access attempts |
+| `vault_put` | Offered but withheld by the grant, so the node refuses |
+
+`vault_put` is exposed on purpose. A model that decides to write is refused by
+the node, not by the tool layer. Tool availability is not authorization: the
+tool list is a menu, and the enclave decides what is actually served. Hiding
+the withheld tool would make the tool server look like the security boundary.
+
+The server holds the agent's key and nothing else. It never holds the tenant's
+key or the data owner's key. A refusal comes back as a readable tool result
+rather than an exception, because one thrown error can take down an agent loop
+on a tool's first failure.
 
 ## Contract functions
 
