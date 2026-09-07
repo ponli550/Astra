@@ -1,0 +1,88 @@
+/**
+ * Environment and identity configuration.
+ *
+ * Three DISTINCT identities are involved and each needs its own key:
+ *
+ *   TENANT — owns the contract, the maps and the credits that pay for
+ *            registration. This is your developer identity.
+ *   AGENT  — the thing acting on a user's behalf. Authenticates as
+ *            itself and holds no standing access.
+ *   USER   — the data owner. The only principal that can grant the
+ *            agent access to the contract.
+ *
+ * Reusing one key across roles does not work: a metered call is
+ * charged to the calling identity's own balance, an agent DID's
+ * balance starts at zero, and a self-grant is not the same edge as a
+ * user-to-agent grant. Claim one key per identity.
+ */
+import "dotenv/config";
+import type { Environment } from "@terminal3/t3n-sdk";
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === "") {
+    throw new Error(
+      `${name} is not set. Copy .env.example to .env and fill it in. ` +
+        `Each identity needs its OWN key from the T3N claim page.`,
+    );
+  }
+  return value.trim();
+}
+
+function optional(name: string): string | undefined {
+  const value = process.env[name];
+  return value && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/** Which T3N network to talk to. */
+export const T3N_ENV = (optional("T3N_ENV") ?? "testnet") as Environment;
+
+/**
+ * Local name of the contract inside the tenant namespace. The host
+ * stores it as `z:<tid>:<tail>`. Keep it short: the full canonical
+ * name is reused in delegation grants, where length limits are
+ * stricter than at registration.
+ */
+export const CONTRACT_TAIL = optional("CONTRACT_TAIL") ?? "consent-vault";
+
+/**
+ * Bump this on every re-register. A version that is not strictly
+ * higher than the deployed one is refused.
+ */
+export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.1.0";
+
+/** Built by `npm run contract:build`. */
+export const WASM_PATH =
+  optional("WASM_PATH") ?? "contract/target/wasm32-wasip2/release/z_tenant_consent.wasm";
+
+export const VAULT_MAP_TAIL = "vault";
+export const AUDIT_MAP_TAIL = "audit";
+
+/** How long the user's grant to the agent stays valid, in seconds. */
+export const GRANT_TTL_SECS = Number(optional("GRANT_TTL_SECS") ?? "900");
+
+export const keys = {
+  /** Tenant developer key. Owns the contract and pays to register it. */
+  get tenant(): string {
+    return required("T3N_API_KEY");
+  },
+  /** The agent's own key. Never the tenant's. */
+  get agent(): string {
+    return required("AGENT_KEY");
+  },
+  /** The data owner's key. Stands in for a real user in this demo. */
+  get user(): string {
+    return required("USER_KEY");
+  },
+};
+
+/**
+ * The tenant DID from `.env`, used only to cross-check the value the
+ * session returns. The session is always the source of truth: a
+ * hardcoded or hand-derived DID is the most common cause of
+ * `tenant not found`.
+ */
+export const DECLARED_TENANT_DID = optional("DID");
+
+/** Vault record the deploy step seeds and the invoke step reads back. */
+export const DEMO_RECORD = "medical-1";

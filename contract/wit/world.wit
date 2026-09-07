@@ -1,0 +1,49 @@
+/// z-tenant-consent — auditable-consent data vault.
+///
+/// Track: "Private data access with auditable consent".
+///
+/// Deliberately imports the BASE tenant capability set only:
+///   tenant-context, logging, kv-store
+///
+/// No `http` / `http-with-placeholders` import, so the contract links
+/// against the `tenant-base` linker world and the demo needs no
+/// third-party API key and no egress grant. Adding an outbound call
+/// later means adding the import here AND adding the host to the
+/// delegating user's `allowed_hosts`.
+package z:tenant-consent@0.1.0;
+
+world tenant-consent {
+    import host:tenant/tenant-context@1.0.0;
+    import host:interfaces/logging@2.1.0;
+    import host:interfaces/kv-store@2.1.0;
+
+    export contracts;
+}
+
+interface contracts {
+    /// Uniform 3-field envelope every node-callable contract takes.
+    ///   input        — JSON arguments for this function, as bytes
+    ///   user-profile — always None for tenant contracts
+    ///   context      — node-minted DynamicContext (trusted), as bytes
+    record generic-input {
+        input:        option<list<u8>>,
+        user-profile: option<list<u8>>,
+        context:      option<list<u8>>,
+    }
+
+    /// Write a record into the tenant vault.
+    /// Input  (JSON): { record_id, payload }
+    /// Output (JSON): { record_id, written_at_secs, seq_no }
+    vault-put: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Read a vault record. Refuses unless the node bound a calling user
+    /// to this execution, and appends an audit entry before returning.
+    /// Input  (JSON): { record_id, purpose }
+    /// Output (JSON): { record_id, payload, audit_key }
+    vault-read: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Enumerate audit entries in sequence order.
+    /// Input  (JSON): { limit }
+    /// Output (JSON): { entries: [AuditEntry], count }
+    audit-list: func(req: generic-input) -> result<list<u8>, string>;
+}
