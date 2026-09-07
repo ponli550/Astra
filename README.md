@@ -9,23 +9,21 @@ with provenance the caller cannot forge.
 Built for the T3 Agent Developer Kit hackathon. Track: **private data access
 with auditable consent**.
 
-## Seeing it work 🎬
+## Ninety seconds of it working 🎬
 
-The demo is a scripted terminal recording, generated rather than captured:
+![Live demo](docs/media/demo.gif)
+
+*Real run against testnet, generated from a script rather than captured, so
+it re-renders when the code changes. Consent withdrawn, so the read is refused.
+Consent granted, so the read is served. The write is refused anyway, because
+consent covers reading only. Then the enclave's own record of all of it.*
 
 ```bash
-npm run demo          # the sequence live, about seventy seconds
-vhs docs/demo.tape    # the same sequence rendered to docs/media/
+npm run demo          # the same sequence live, about seventy seconds
+vhs docs/demo.tape    # re-render the recording to docs/media/
 ```
 
-Consent withdrawn, so the read is refused. Consent granted, so the read is
-served. The write is refused anyway, because consent covers reading only. Then
-the enclave's own record of all of it.
-
-The recording is generated from [docs/demo.tape](docs/demo.tape) so it re-renders
-after the code changes instead of going stale, and it needs an identity with
-credits because every step is a real call. There is a spoken walkthrough script
-in [docs/narration.md](docs/narration.md).
+There is a spoken walkthrough script in [docs/narration.md](docs/narration.md).
 
 ## The claim, stated narrowly
 

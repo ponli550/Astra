@@ -7,7 +7,7 @@
  * Order matters: a map's access rules name a numeric contract id, and
  * that id only exists once registration has returned it.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   AUDIT_MAP_TAIL,
   CONTRACT_TAIL,
@@ -47,6 +47,10 @@ async function main() {
     console.log(`\nregistered ${registered.name}`);
     console.log(`  version     ${CONTRACT_VERSION}`);
     console.log(`  contract_id ${contractId}`);
+    // Persist it immediately. Nothing can look this up afterwards, and a
+    // truncated terminal is enough to lose it, which then costs a
+    // re-registration to recover.
+    await rememberContractId(contractId);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     if (!/not higher than current version/i.test(detail)) throw error;
@@ -125,6 +129,29 @@ async function main() {
   );
 
   console.log(`\nnext: npm run policy:allow`);
+  console.log(`contract_id ${contractId}`);
+}
+
+/**
+ * Write CONTRACT_ID into .env, replacing any earlier value.
+ *
+ * The id is returned exactly once, at registration, and no API returns
+ * it later. Losing it means the map rules cannot be re-pointed on the
+ * next deploy without registering yet another version.
+ */
+async function rememberContractId(id: number): Promise<void> {
+  let env = "";
+  try {
+    env = await readFile(".env", "utf8");
+  } catch {
+    return; // no .env to update; the value was printed above
+  }
+  const line = `CONTRACT_ID=${id}`;
+  const next = /^CONTRACT_ID=.*$/m.test(env)
+    ? env.replace(/^CONTRACT_ID=.*$/m, line)
+    : `${env.trimEnd()}\n${line}\n`;
+  await writeFile(".env", next, "utf8");
+  console.log(`  saved to .env as ${line}`);
 }
 
 /** Show the path actually tried, so a bad relative path is obvious. */

@@ -33,7 +33,7 @@ Enter
 Sleep 12s
 
 # --- 2. the read is refused inside the enclave ----------------------
-Type "clear && npm run invoke --silent"
+Type "clear && EXPECT=denied npm run invoke --silent"
 Enter
 Sleep 20s
 
