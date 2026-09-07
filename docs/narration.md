@@ -3,9 +3,21 @@
 Shot list and script for a spoken walkthrough. Timings are cumulative and
 assume an unhurried read, roughly 140 words a minute.
 
-The visual bed is `docs/media/demo.mp4`, rendered from `docs/demo.tape`. Where a
-segment needs something the terminal recording does not show, the shot column
-says so.
+The visual bed is `docs/media/demo-agent.mp4`, rendered from
+`docs/demo-agent.tape`: an agent on the left, the owner's console on the right.
+Its own timeline, for cueing:
+
+| Time | On screen |
+| --- | --- |
+| 0:00 – 0:14 | Both panes come up. Console shows consent in force with a countdown. |
+| 0:14 – 0:46 | Agent asked to read. Calls the tool, reports the record, says "served". Console trail gains the read. |
+| 0:46 – 1:00 | Focus moves right. One key withdraws consent. Console flips to "withdrawn", policy version bumps, notice appears. |
+| 1:00 – 1:40 | Agent asked again. Refused. It repeats the enclave's reason, then guesses wrongly at why. |
+| 1:40 – 1:56 | Hold on both panes: the agent's account beside the enclave's record. |
+
+The mismatch at 1:00 onwards is the moment to land: the agent speculates about
+rate limits or a one-time grant, and the console shows the truth, which is that
+consent was withdrawn. That is the whole argument in one frame.
 
 Read it as written or feed it to a narration pipeline. Nothing here needs a
 person on camera.
