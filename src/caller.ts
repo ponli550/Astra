@@ -14,8 +14,13 @@
  * and never care which transport answered. Selection is configuration:
  *
  *   AGENT_API_KEY set     bearer, as the minted agent (AGENT_DID)
- *   AGENT_KEY set         session, as an eth-key agent
+ *   AGENT_KEY set         session, as an eth-key agent claimed from the
+ *                         claim page, which is the vendor's documented path
  *   otherwise             session, as the owner calling its own contract
+ *
+ * The second agent follows the same rule with AGENT2_API_KEY (bearer) or
+ * AGENT2_KEY (eth key). A key claimed with a second work email arrives
+ * funded, so this is the fastest route to a live second party.
  *
  * CALLER=second selects the second minted agent (AGENT2_*), for the
  * delegation-chain demo. CALLER=tenant (or owner) forces the owner's own
@@ -24,7 +29,7 @@
  */
 import { getContractVersion, getNodeUrl, invoke, setEnvironment } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID, T3N_ENV } from "./config.js";
-import { canonicalName, openCallerSession } from "./session.js";
+import { canonicalName, openCallerSession, openSession } from "./session.js";
 
 export interface Caller {
   /** Which transport answered. */
@@ -92,7 +97,16 @@ export async function openCaller(): Promise<Caller> {
     };
   }
 
-  const session = await openCallerSession();
+  // An eth-key second agent, claimed from the claim page with another
+  // work email. Selected by CALLER=second when no bearer token exists
+  // for that slot.
+  const which = (process.env["CALLER"] ?? "").toLowerCase();
+  const wantsSecond = which === "second" || which === "agent2" || which === "b";
+  const secondKey = process.env["AGENT2_KEY"];
+  const session =
+    wantsSecond && secondKey && !/^0x\.+$/.test(secondKey)
+      ? await openSession("agent B (eth key)", secondKey)
+      : await openCallerSession();
   const { contract, version } = await contractRef();
   return {
     kind: "session",
