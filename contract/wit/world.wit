@@ -10,7 +10,7 @@
 /// third-party API key and no egress grant. Adding an outbound call
 /// later means adding the import here AND adding the host to the
 /// delegating user's `allowed_hosts`.
-package z:tenant-consent@0.3.1;
+package z:tenant-consent@0.4.1;
 
 world tenant-consent {
     import host:tenant/tenant-context@1.0.0;
@@ -57,8 +57,20 @@ interface contracts {
     policy-set: func(req: generic-input) -> result<list<u8>, string>;
 
     /// Read the consent policy in force. Readable by the tenant, so the
-    /// owner can inspect what they have granted.
+    /// owner can inspect what they have granted and what has been handed on.
     /// Output (JSON): { version, allowed_callers, allowed_functions,
-    ///                  valid_until_secs, now_secs, expired }
+    ///                  valid_until_secs, delegations, now_secs, expired }
     policy-get: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Hand part of the caller's own permission to another identity.
+    /// Permitted only to a caller that currently holds something, and only
+    /// for a subset of it: the same functions or fewer, the same expiry or
+    /// sooner, never past the chain's depth cap. Widening is refused inside
+    /// the enclave and recorded. Every use downstream is intersected with
+    /// what the delegator still holds, so withdrawing consent at the root
+    /// empties the chain without deleting anything.
+    /// Input  (JSON): { to, functions, valid_until_secs }
+    /// Output (JSON): { status, reason?, version, from, to, functions,
+    ///                  valid_until_secs, depth, audit_key }
+    policy-delegate: func(req: generic-input) -> result<list<u8>, string>;
 }
