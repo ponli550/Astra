@@ -4,35 +4,40 @@
  *
  *   npm run invoke
  *
- * # What is actually enforced, and what is not
+ * # What enforces this
  *
- * A grant names a contract, its functions, and the external hosts it
- * may reach. Only the last of those is a hard gate for a tenant
- * contract: the platform's enforcement point is egress, and the
- * published reference revokes access by clearing allowed hosts while
- * leaving the function list populated, which makes the function still
- * run and only its outbound call fail.
+ * Not the delegation grant. The platform's enforcement point for a
+ * tenant contract is egress, and this contract makes no outbound call,
+ * so there is nothing there to deny. Verified: with the grant revoked,
+ * reads still succeeded.
  *
- * This contract makes no outbound call, so there is nothing for the
- * platform to deny. Verified against testnet: with the grant fully
- * revoked, `vault-read` still returns the record.
+ * The contract evaluates a consent policy itself, inside the enclave,
+ * against values the node mints: the calling identity from tenant
+ * context and the cluster-pinned clock. A caller cannot claim to be
+ * someone else and cannot move an expiry. Change consent with
+ * `npm run policy:allow` and `npm run policy:deny`.
  *
- * What that leaves standing is the audit trail. Provenance is set inside
- * the enclave from node-minted context, so the caller identity,
- * timestamp and sequence number cannot be forged, and a denial is
- * recorded as faithfully as a success. That part is real and verified.
+ * Three calls, and only the first should return a payload:
  *
- * The consequence for the demo: talk about the audit trail as evidence,
- * not about the function list as a barrier.
+ *   1. Read the seeded record. Served, and audited.
+ *   2. Read a record that does not exist. Denied, and still audited.
+ *   3. Write, which consent does not cover. Refused inside the enclave.
  */
 import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
-import { CONTRACT_TAIL, DECLARED_TENANT_DID, DEMO_RECORD, MODE } from "./config.js";
+import { CONTRACT_TAIL, DECLARED_TENANT_DID, DEMO_RECORD } from "./config.js";
 import { canonicalName, openCallerSession, resolveGrantSubject } from "./session.js";
 
 interface VaultReadResponse {
   record_id: string;
   status: "served" | "denied";
   payload?: string;
+  reason?: string;
+  audit_key: string;
+}
+
+interface VaultPutResponse {
+  record_id: string;
+  status: "served" | "denied";
   reason?: string;
   audit_key: string;
 }
@@ -95,38 +100,31 @@ async function main() {
       `have erased its own record and left a trail of successes only.`,
   );
 
-  // --- the function the grant does not name ------------------------
+  // --- the function consent does not cover -------------------------
   //
-  // Reported, not asserted. On a self-call with no egress the platform
-  // has nothing to deny, so this is expected to succeed and saying
-  // otherwise would be a false claim in the demo.
-  if (MODE === "self") {
-    console.log(
-      `\nSkipping vault-put. The grant does not name it, but the platform's\n` +
-        `enforcement point for a tenant contract is egress, and this contract\n` +
-        `makes no outbound call, so on a self-call there is nothing to deny.\n` +
-        `Verified: with the grant revoked, the read above still succeeds.\n` +
-        `\nThe audit trail is the guarantee that holds here. Enforcement of the\n` +
-        `function scope needs a delegated call from a funded second identity.`,
+  // Asserted, not merely reported. The contract now evaluates the policy
+  // itself, so this is a real gate rather than a statement of intent.
+  console.log(`\nvault-put, which the consent policy does not cover:`);
+  const smuggled = await call<VaultPutResponse>("vault-put", {
+    record_id: "probe-unauthorised",
+    payload: "written by a call consent does not cover",
+  });
+  console.log(`  status    ${smuggled.status}`);
+  console.log(`  reason    ${smuggled.reason ?? "(none)"}`);
+  console.log(`  audit_key ${smuggled.audit_key}`);
+  if (smuggled.status !== "denied") {
+    console.error(
+      `  UNEXPECTED: the write was permitted. The policy names only ` +
+        `${"vault-read"} and audit-list, so this should have been refused ` +
+        `inside the enclave.`,
     );
+    process.exitCode = 1;
   } else {
-    console.log(`\nattempting vault-put, which the grant does not name:`);
-    try {
-      const smuggled = await call<VaultReadResponse>("vault-put", {
-        record_id: "probe-unauthorised",
-        payload: "written by a call the grant does not cover",
-      });
-      console.log(
-        `  it SUCCEEDED: ${JSON.stringify(smuggled)}\n` +
-          `  So the function list was not enforced on this call either. Treat the\n` +
-          `  audit trail, not the function scope, as the guarantee.`,
-      );
-    } catch (error: unknown) {
-      console.log(
-        `  refused: ${error instanceof Error ? error.message : String(error)}\n` +
-          `  The function scope IS enforced on a delegated call.`,
-      );
-    }
+    console.log(
+      `\n  Refused inside the enclave, and the refusal is recorded. This is the\n` +
+        `  check the delegation grant does not make for a contract with no\n` +
+        `  egress, which is why the contract makes it.`,
+    );
   }
 
   console.log(`\nnext: npm run audit`);

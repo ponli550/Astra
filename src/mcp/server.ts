@@ -5,19 +5,16 @@
  *
  *   npm run mcp        # runs on stdio; a client spawns this, you don't
  *
- * # Why all three functions are exposed, including the withheld one
+ * # Why all four tools are exposed, including the withheld one
  *
- * `vault_put` is offered even though the owner's grant does not name
- * it, and it is not this process's job to hide it. Tool availability is
- * not authorization, so the tool list is a menu rather than a security
- * boundary.
+ * `vault_put` is offered even though consent does not cover it, and it
+ * is not this process's job to hide it. Tool availability is not
+ * authorization: the tool list is a menu, and the contract decides.
  *
- * Be careful what you claim from that, though. The platform's
- * enforcement point for a tenant contract is egress, and this contract
- * makes no outbound call, so a write may succeed despite being outside
- * the grant. Verified against testnet. What the write cannot escape is
- * the audit trail, which records it against this identity with
- * provenance set inside the enclave. Treat the trail as the guarantee.
+ * A model that calls it is refused inside the enclave, with a reason,
+ * and the refusal is recorded. Verified against testnet. Hiding the
+ * tool would make this process look like the security boundary, which
+ * is the confusion most worth dispelling.
  *
  * # What this process holds
  *
@@ -117,8 +114,10 @@ server.registerTool(
         contract,
         contract_version: version,
         note:
-          "The agent holds no standing access. Every call is checked against the " +
-          "grant_subject's delegation, which names specific functions and expires.",
+          "This caller holds no standing access. Every call is evaluated inside the " +
+          "enclave against a consent policy that names permitted callers and " +
+          "functions and carries an expiry. Use audit_list to see what has been " +
+          "attempted and what was refused.",
       });
     } catch (error: unknown) {
       return asRefusal("vault_status", error);
@@ -131,9 +130,10 @@ server.registerTool(
   {
     title: "Read a record from the consent-gated vault",
     description:
-      "Retrieve one sensitive record. Succeeds only while the data owner's grant covers " +
-      "this function and has not expired. Every attempt is recorded in a tamper-evident " +
-      "audit trail inside the enclave, whether or not a record is returned, so state a " +
+      "Retrieve one sensitive record. Succeeds only while the consent policy names " +
+      "this caller and this function and has not lapsed, all evaluated inside the " +
+      "enclave against a cluster-pinned clock. Every attempt is recorded in a " +
+      "tamper-evident audit trail whether or not a record is returned, so state a " +
       "truthful purpose.",
     inputSchema: {
       record_id: z.string().describe("Record identifier, for example 'medical-1'."),
@@ -175,14 +175,12 @@ server.registerTool(
 server.registerTool(
   "vault_put",
   {
-    title: "Write a record into the vault",
+    title: "Write a record into the vault (consent does not cover this)",
     description:
-      "Store a record. The data owner's grant deliberately does not name this " +
-      "function. Be aware that the platform's enforcement point for this contract " +
-      "is outbound network access, which this contract never uses, so the write may " +
-      "well succeed anyway. What it cannot avoid is being recorded: the audit trail " +
-      "will show the write, attributed to this identity, with provenance set inside " +
-      "the enclave.",
+      "Store a record. The consent policy deliberately does not permit this " +
+      "function, so the contract refuses it inside the enclave and records the " +
+      "refusal with a reason. It is listed here to show that a tool being available " +
+      "is not the same as a call being permitted.",
     inputSchema: {
       record_id: z.string().describe("Record identifier."),
       payload: z.string().describe("Record contents."),

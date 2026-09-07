@@ -15,13 +15,22 @@ import {
   formatRemaining,
   poll,
   progressBar,
-  revokeAgent,
+  revokeConsent,
   secondsRemaining,
   shortDid,
   type Snapshot,
 } from "./state.js";
 
-const POLL_MS = 2000;
+/**
+ * Poll interval.
+ *
+ * Each poll makes three metered calls, and the node enforces a
+ * per-minute fuel quota per tenant. A two-second interval tripped
+ * `quota exceeded (fuel_per_minute)` during testing, which is a poor
+ * trade for a console watching state that changes when a person acts.
+ * Ten seconds keeps it responsive enough to watch a withdrawal land.
+ */
+const POLL_MS = Number(process.env["MONITOR_POLL_MS"] ?? 10_000);
 
 function outcomeColor(outcome: string): string {
   if (outcome === "served") return "green";
@@ -40,62 +49,78 @@ function Header({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-function GrantPanel({
+/**
+ * Consent as the contract enforces it.
+ *
+ * The delegation grant is shown underneath, deliberately labelled as not
+ * the gate: the platform's enforcement point is egress and this contract
+ * makes no outbound call, so the grant here is intent rather than
+ * enforcement. The policy is what every call is evaluated against.
+ */
+function ConsentPanel({
   snapshot,
   nowSecs,
-  grantTotal,
+  policyTotal,
   busy,
 }: {
   snapshot: Snapshot;
   nowSecs: number;
-  grantTotal: number;
+  policyTotal: number;
   busy: boolean;
 }) {
-  const { grant } = snapshot;
-  const remaining = secondsRemaining(grant.validUntilSecs, nowSecs);
-  const expired = remaining === 0;
-  const live = grant.present && !expired;
+  const { policy, grant } = snapshot;
+  const remaining = secondsRemaining(policy.validUntilSecs, nowSecs);
+  // A failed poll must not be reported as "no consent". Not knowing and
+  // knowing there is none are different claims, and confusing them would
+  // make a rate-limited console look like a revoked one.
+  const known = snapshot.authenticated && snapshot.error === undefined;
+  const inForce =
+    known && policy.version > 0 && policy.allowedCallers.length > 0 && !policy.expired;
 
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1} marginBottom={1}>
       <Box>
-        <Text bold>GRANT   </Text>
+        <Text bold>CONSENT </Text>
         {busy ? (
-          <Text color="cyan">revoking...</Text>
-        ) : !snapshot.authenticated ? (
+          <Text color="cyan">withdrawing...</Text>
+        ) : !known ? (
           <Text color="red">unknown</Text>
-        ) : live ? (
-          <Text color="green">active</Text>
-        ) : expired ? (
-          <Text color="yellow">expired</Text>
+        ) : inForce ? (
+          <Text color="green">in force</Text>
+        ) : policy.expired ? (
+          <Text color="yellow">lapsed</Text>
+        ) : policy.version === 0 ? (
+          <Text color="red">none ever set</Text>
         ) : (
-          <Text color="red">none</Text>
+          <Text color="red">withdrawn</Text>
         )}
+        <Text dimColor>  {known ? `policy v${policy.version}` : "state not read"}</Text>
       </Box>
       <Text>
-        <Text dimColor>agent   </Text>
+        <Text dimColor>caller  </Text>
         {shortDid(snapshot.agentDid)}
       </Text>
       <Text>
-        <Text dimColor>subject </Text>
-        {shortDid(snapshot.ownerDid)}
+        <Text dimColor>allows  </Text>
+        {policy.allowedFunctions.length > 0
+          ? policy.allowedFunctions.join(", ")
+          : "(nothing)"}
       </Text>
-      <Text>
-        <Text dimColor>allowed </Text>
-        {grant.functions.length > 0 ? grant.functions.join(", ") : "(nothing)"}
-      </Text>
-      {live && (
+      {inForce && policy.validUntilSecs !== undefined && (
         <Text>
           <Text dimColor>expires </Text>
-          {formatRemaining(remaining)} [{progressBar(remaining, grantTotal)}]
+          {formatRemaining(remaining)} [{progressBar(remaining, policyTotal)}]
         </Text>
       )}
-      {!snapshot.authenticated ? (
-        <Text dimColor>cannot read the grant until the keys authenticate</Text>
+      <Text dimColor>
+        grant   {grant.present ? grant.functions.join(", ") : "none"} (intent, not the gate)
+      </Text>
+      {!known ? (
+        <Text dimColor>consent state unread, so nothing here is a claim about it</Text>
       ) : (
-        !grant.present &&
+        !inForce &&
         !busy && (
-          <Text dimColor>the agent's next call fails. restore with: npm run grant</Text>
+          <Text dimColor>every gated call fails. restore with: npm run policy:allow</Text>
         )
       )}
     </Box>
@@ -143,19 +168,19 @@ export function App() {
   const interactive = isRawModeSupported === true && process.stdin.isTTY === true;
   const [snapshot, setSnapshot] = useState<Snapshot | undefined>();
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000));
-  const [grantTotal, setGrantTotal] = useState(0);
+  const [policyTotal, setPolicyTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
 
   const refresh = useCallback(async () => {
     const next = await poll();
     setSnapshot(next);
-    // Remember the longest life this grant was ever seen with, so the
+    // Remember the longest life this policy was ever seen with, so the
     // bar has a denominator. Remaining time alone cannot give one.
-    const until = next.grant.validUntilSecs;
+    const until = next.policy.validUntilSecs;
     if (until !== undefined) {
       const seen = until - Math.floor(Date.now() / 1000);
-      setGrantTotal((prev) => Math.max(prev, seen));
+      setPolicyTotal((prev) => Math.max(prev, seen));
     }
   }, []);
 
@@ -175,10 +200,14 @@ export function App() {
       if (input === "r" && !busy) {
         setBusy(true);
         setNotice(undefined);
-        void revokeAgent()
-          .then(() => setNotice("grant withdrawn. the agent's next call fails."))
+        void revokeConsent()
+          .then(() =>
+            setNotice("consent withdrawn. the next gated call fails inside the enclave."),
+          )
           .catch((error: unknown) =>
-            setNotice(`revoke failed: ${error instanceof Error ? error.message : String(error)}`),
+            setNotice(
+              `withdraw failed: ${error instanceof Error ? error.message : String(error)}`,
+            ),
           )
           .finally(() => {
             setBusy(false);
@@ -195,7 +224,12 @@ export function App() {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <GrantPanel snapshot={snapshot} nowSecs={nowSecs} grantTotal={grantTotal} busy={busy} />
+      <ConsentPanel
+        snapshot={snapshot}
+        nowSecs={nowSecs}
+        policyTotal={policyTotal}
+        busy={busy}
+      />
       <Header snapshot={snapshot} />
       <Trail snapshot={snapshot} />
       {snapshot.audit.malformed_entries > 0 && (
@@ -215,7 +249,7 @@ export function App() {
       )}
       <Box marginTop={1}>
         {interactive ? (
-          <Text dimColor>[r] revoke the agent   [q] quit</Text>
+          <Text dimColor>[r] withdraw consent   [q] quit</Text>
         ) : (
           <Text dimColor>read-only: no terminal attached, so keys are off</Text>
         )}

@@ -29,6 +29,10 @@ pub struct VaultPutReq {
 #[derive(Debug, Serialize)]
 pub struct VaultPutResp {
     pub record_id: String,
+    pub status: &'static str,
+    /// Present only when `status` is `denied`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub written_at_secs: u64,
     pub seq_no: u64,
     pub audit_key: String,
@@ -126,6 +130,7 @@ pub fn vault_read(input: &[u8]) -> Result<Vec<u8>, String> {
 use crate::{
     audit::{self, AuditEntry},
     host::{interfaces::kv_store, tenant::tenant_context},
+    policy::{self, Policy},
 };
 
 /// Read the calling user DID the node bound to this execution.
@@ -168,9 +173,27 @@ fn base_entry(
 
 #[cfg(target_arch = "wasm32")]
 fn vault_put_wasm(req: VaultPutReq) -> Result<VaultPutResp, String> {
-    let entry = base_entry("vault-put", &req.record_id, None)?;
-    let map = crate::map_name(crate::VAULT_TAIL);
+    let mut entry = base_entry("vault-put", &req.record_id, None)?;
 
+    // Same gate as the read. With the policy naming only vault-read,
+    // this is where an unauthorised write is actually stopped, which the
+    // delegation grant did not do.
+    let gate = policy::load()?;
+    if let Err(denial) = policy::evaluate(&gate, &entry.caller_did, "vault-put", entry.at_secs) {
+        entry.outcome = STATUS_DENIED.to_string();
+        entry.reason = denial.reason();
+        let audit_key = audit::append(&entry)?;
+        return Ok(VaultPutResp {
+            record_id: req.record_id,
+            status: STATUS_DENIED,
+            reason: Some(entry.reason),
+            written_at_secs: entry.at_secs,
+            seq_no: entry.seq_no,
+            audit_key,
+        });
+    }
+
+    let map = crate::map_name(crate::VAULT_TAIL);
     kv_store::put(&map, req.record_id.as_bytes(), req.payload.as_bytes())
         .map_err(|e| format!("vault-put: write {map}: {e}"))?;
 
@@ -178,6 +201,8 @@ fn vault_put_wasm(req: VaultPutReq) -> Result<VaultPutResp, String> {
 
     Ok(VaultPutResp {
         record_id: req.record_id,
+        status: STATUS_SERVED,
+        reason: None,
         written_at_secs: entry.at_secs,
         seq_no: entry.seq_no,
         audit_key,
@@ -189,6 +214,28 @@ fn vault_read_wasm(req: VaultReadReq) -> Result<VaultReadResp, String> {
     // Establish the principal BEFORE touching the record, so an
     // unattributable call never reads the data at all.
     let mut entry = base_entry("vault-read", &req.record_id, req.purpose)?;
+
+    // The consent gate. This is the check the delegation grant does not
+    // make for a contract with no egress, so the contract makes it.
+    // Refuse before reading anything, and record the refusal.
+    let gate = policy::load()?;
+    if let Err(denial) = policy::evaluate(
+        &gate,
+        &entry.caller_did,
+        "vault-read",
+        entry.at_secs,
+    ) {
+        entry.outcome = STATUS_DENIED.to_string();
+        entry.reason = denial.reason();
+        let audit_key = audit::append(&entry)?;
+        return Ok(VaultReadResp {
+            record_id: req.record_id,
+            status: STATUS_DENIED,
+            payload: None,
+            reason: Some(entry.reason),
+            audit_key,
+        });
+    }
 
     let map = crate::map_name(crate::VAULT_TAIL);
 
@@ -324,5 +371,199 @@ mod tests {
         };
         let json = serde_json::to_string(&served).unwrap();
         assert!(!json.contains("reason"), "success carried a reason: {json}");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Policy administration
+// ---------------------------------------------------------------------
+
+/// `policy-set` input. Absent `valid_until_secs` means no expiry.
+#[derive(Debug, Deserialize)]
+pub struct PolicySetReq {
+    #[serde(default)]
+    pub allowed_callers: Vec<String>,
+    #[serde(default)]
+    pub allowed_functions: Vec<String>,
+    #[serde(default)]
+    pub valid_until_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicySetResp {
+    pub version: u32,
+    pub allowed_callers: Vec<String>,
+    pub allowed_functions: Vec<String>,
+    pub valid_until_secs: Option<u64>,
+    pub audit_key: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyGetResp {
+    pub version: u32,
+    pub allowed_callers: Vec<String>,
+    pub allowed_functions: Vec<String>,
+    pub valid_until_secs: Option<u64>,
+    /// Cluster-pinned time the answer was computed against.
+    pub now_secs: u64,
+    pub expired: bool,
+}
+
+/// A caller may only be listed as 40 hex characters, the shape a DID
+/// decodes to. Rejecting anything else keeps a typo from silently
+/// producing a policy that matches nobody.
+pub fn validate_caller_hex(caller: &str) -> Result<(), String> {
+    if caller.len() != 40 || !caller.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "bad input: caller \"{caller}\" must be 40 hex characters, the body of a did:t3n"
+        ));
+    }
+    Ok(())
+}
+
+pub fn policy_set(input: &[u8]) -> Result<Vec<u8>, String> {
+    let req: PolicySetReq =
+        serde_json::from_slice(input).map_err(|e| format!("policy-set: bad input: {e}"))?;
+    for caller in &req.allowed_callers {
+        validate_caller_hex(caller).map_err(|e| format!("policy-set: {e}"))?;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resp = policy_set_wasm(req)?;
+        serde_json::to_vec(&resp).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = req;
+        Err("policy_set reaches the host and only runs on the wasm32 target".to_string())
+    }
+}
+
+pub fn policy_get() -> Result<Vec<u8>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resp = policy_get_wasm()?;
+        serde_json::to_vec(&resp).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Err("policy_get reaches the host and only runs on the wasm32 target".to_string())
+    }
+}
+
+/// Only the tenant that owns this contract may read or change the policy.
+///
+/// The comparison is between two values the node mints: the calling
+/// identity and the tenant this contract runs under. Neither comes from
+/// the request, so a caller cannot claim to be the owner. This is an
+/// `Err` rather than a recorded denial because a caller with no standing
+/// to touch policy has nothing worth recording against the consent
+/// trail, and the check runs before any policy is read.
+#[cfg(target_arch = "wasm32")]
+fn require_tenant(action: &str) -> Result<String, String> {
+    let caller = require_caller()?;
+    let tenant = hex::encode(tenant_context::tenant_did());
+    if !caller.eq_ignore_ascii_case(&tenant) {
+        return Err(format!(
+            "{action}: only the tenant that owns this contract may do this"
+        ));
+    }
+    Ok(caller)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn policy_set_wasm(req: PolicySetReq) -> Result<PolicySetResp, String> {
+    require_tenant("policy-set")?;
+
+    let existing = policy::load()?;
+    let next = Policy {
+        allowed_callers: req.allowed_callers,
+        allowed_functions: req.allowed_functions,
+        valid_until_secs: req.valid_until_secs,
+        // Monotonic, so a reader can tell a fresh document from a stale
+        // one, and so version 0 keeps meaning "nothing in force".
+        version: existing.version.saturating_add(1),
+    };
+    policy::store(&next)?;
+
+    // Recorded in the same trail as the accesses, so widening permission
+    // is as visible as using it.
+    let mut entry = base_entry("policy-set", "consent", None)?;
+    entry.reason = alloc::format!(
+        "version {} -> {}, {} caller(s), {} function(s), expiry {}",
+        existing.version,
+        next.version,
+        next.allowed_callers.len(),
+        next.allowed_functions.len(),
+        next.valid_until_secs
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    let audit_key = audit::append(&entry)?;
+
+    Ok(PolicySetResp {
+        version: next.version,
+        allowed_callers: next.allowed_callers,
+        allowed_functions: next.allowed_functions,
+        valid_until_secs: next.valid_until_secs,
+        audit_key,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn policy_get_wasm() -> Result<PolicyGetResp, String> {
+    require_tenant("policy-get")?;
+
+    let current = policy::load()?;
+    let now_secs = tenant_context::cluster_timestamp_secs();
+    let expired = current
+        .valid_until_secs
+        .map(|until| now_secs >= until)
+        .unwrap_or(false);
+
+    Ok(PolicyGetResp {
+        version: current.version,
+        allowed_callers: current.allowed_callers,
+        allowed_functions: current.allowed_functions,
+        valid_until_secs: current.valid_until_secs,
+        now_secs,
+        expired,
+    })
+}
+
+#[cfg(test)]
+mod policy_admin_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_caller_that_is_not_forty_hex_characters() {
+        // A typo here would otherwise produce a policy matching nobody.
+        assert!(validate_caller_hex("abe8e6dc").is_err());
+        assert!(validate_caller_hex("did:t3n:abe8e6dc8a4335ae0c2a97750185f3b25e880dba").is_err());
+        assert!(validate_caller_hex(&"z".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn accepts_the_body_of_a_did() {
+        assert!(validate_caller_hex("abe8e6dc8a4335ae0c2a97750185f3b25e880dba").is_ok());
+    }
+
+    #[test]
+    fn policy_set_rejects_a_bad_caller_before_reaching_the_host() {
+        let input = serde_json::to_vec(&serde_json::json!({
+            "allowed_callers": ["not-a-did"],
+            "allowed_functions": ["vault-read"],
+        }))
+        .unwrap();
+        let err = policy_set(&input).unwrap_err();
+        assert!(err.contains("40 hex characters"), "got: {err}");
+    }
+
+    #[test]
+    fn policy_set_rejects_non_json() {
+        assert!(policy_set(b"not json").unwrap_err().contains("bad input"));
     }
 }

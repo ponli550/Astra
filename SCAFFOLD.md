@@ -7,45 +7,59 @@ audit entry.
 
 ## What it demonstrates
 
-Verified against testnet:
+Verified end to end against testnet:
 
-- **A tamper-evident audit trail.** Every access attempt is recorded in the
-  same transaction as the access, so a read that is not recorded cannot commit.
-  Provenance comes from node-minted context inside the enclave, so the caller
-  identity, timestamp, sequence number and contract id cannot be forged by
-  whoever made the call.
-- **Denials are recorded as faithfully as successes.** The host rolls back
-  everything a failed call wrote, so denials return successfully with a reason
-  rather than as errors. A trail that only recorded successes would be worthless.
-- **The contract refuses a call it cannot attribute.** Reached by a path with no
-  authenticated session, it returns an error rather than serving anonymously.
-- **Separate identities and delegated grants.** A grant names one contract, its
-  functions, its egress hosts, and a validity window, and is issued by the data
-  owner rather than the tenant or the agent.
+- **Consent is enforced inside the enclave.** The contract loads a policy on
+  every gated call and refuses an unlisted caller, an unlisted function, or a
+  lapsed permission, before touching any data.
+- **Withdrawal takes effect immediately.** Rewriting the policy stops the next
+  call, with no redeploy and no new contract id.
+- **A missing policy denies everyone.** Forgetting to provision it cannot
+  silently disable the gate.
+- **A tamper-evident audit trail.** Every attempt is recorded in the same
+  transaction as the access, so a read that is not recorded cannot commit.
+  Denials are recorded as faithfully as successes.
+- **Provenance cannot be forged.** Caller identity, cluster-pinned timestamp,
+  sequence number and contract id all come from node-minted context, never from
+  the request body.
+- **Policy changes are recorded too**, so widening permission is as visible as
+  using it.
 
-## What is NOT enforced, and this matters
+## Why the contract enforces this, and not the delegation grant
 
-**The grant's function list is not a hard gate for this contract.** The
-platform's enforcement point for a tenant contract is **egress**. The published
-reference revokes access by clearing allowed hosts while leaving the function
-list populated, and its own architecture notes say the function still runs and
-only the outbound call fails.
+The platform's enforcement point for a tenant contract is **egress**. A
+delegation grant names functions, but the published reference revokes access by
+clearing allowed hosts and leaves the function list populated, because the
+function still runs and only its outbound call is denied.
 
-This contract makes no outbound call, so there is nothing for the platform to
-deny. Verified: with the grant fully revoked, `vault-read` still returns the
+This contract makes no outbound call, so there is nothing there for the platform
+to deny. Verified: with the grant fully revoked, `vault-read` still returned the
 record.
 
-Importing only the base capability set removed the external dependency and it
-removed the enforcement lever along with it. Two consequences:
+So the contract is the policy authority, which is the same pattern the reference
+names for itself. What makes that enforcement rather than intent is that every
+value the decision rests on is minted by the node:
 
-1. **Describe the audit trail as the guarantee, not the function scope as a
-   barrier.** The trail is real, unforgeable and verified. The function list is
-   an expression of intent that this contract's shape cannot enforce.
-2. **Making consent enforceable needs one of two changes.** Either give the
-   contract an outbound call so egress becomes the lever, which is how the
-   reference works, or have the contract enforce its own policy from a KV map,
-   which is what the reference's contract also does for its caps and
-   allowlists. Neither is done here.
+- the calling identity comes from tenant context, never from the request body,
+  so a caller cannot claim to be someone else;
+- the clock is the cluster-pinned timestamp, so a caller cannot move an expiry;
+- policy administration is restricted to the tenant identity by comparing two
+  node-minted values.
+
+The delegation grant is still issued and still shown in the console, labelled as
+intent rather than the gate.
+
+## What this does not claim
+
+Whoever can write the tenant's maps can rewrite the policy, and with one
+identity that is the same person who owns the data. Two honest limits follow:
+
+1. The guarantee is that a call cannot reach the data without passing the check
+   inside the enclave, and cannot pass it without being recorded. It is not
+   protection from the tenant.
+2. A map owner can write entries through the control plane, bypassing both the
+   map's rules and `policy-set`, and such a change leaves no audit entry because
+   the contract never sees it.
 
 ## Layout
 
@@ -56,7 +70,8 @@ removed the enforcement lever along with it. Two consequences:
 | `contract/wit/deps/` | Vendored host interface definitions |
 | `src/` | TypeScript orchestration, one script per step |
 | `src/mcp/` | Tool server that lets an agent drive the contract |
-| `src/monitor/` | The data owner's console: grant state, audit trail, revoke |
+| `src/policy.ts` | Consent administration: show, grant, withdraw |
+| `src/monitor/` | The owner's console: consent state, audit trail, withdraw |
 | `opencode.jsonc` | Registers the tool server with OpenCode |
 
 The contract imports only `tenant-context`, `logging` and `kv-store`, so it
@@ -96,10 +111,13 @@ npm run whoami            # confirms the identities before spending credits
 npm run contract:build    # cargo -> wasm32-wasip2 component
 npm run contract:test     # 12 unit tests, native target
 npm run deploy            # register contract, create maps, seed a record
-npm run grant             # USER authorises the agent, time-boxed
+npm run policy:allow      # grant consent, time-boxed and enforced
+npm run grant             # issue the delegation grant as well
 npm run invoke            # agent reads the record; withheld function is refused
 npm run audit             # read back the audit trail
-npm run revoke            # remove the grant; invoke fails until you re-grant
+npm run policy            # show the consent policy in force
+npm run policy:deny       # withdraw consent; invoke fails immediately
+npm run revoke            # also drop the delegation grant
 npm run monitor           # the owner's console, run beside opencode
 npm run test              # display-helper tests, no credentials needed
 ```
@@ -183,9 +201,11 @@ decision to make.
 
 | Function | Purpose |
 | --- | --- |
-| `vault-put` | Write a record. Deliberately withheld from the agent's grant. |
-| `vault-read` | Read a record. Refuses without a bound calling user, and audits the attempt whether served or denied. |
-| `audit-list` | Enumerate audit entries in sequence order, with a count of any that could not be decoded. |
+| `vault-read` | Read a record, gated by the consent policy. Audits the attempt either way. |
+| `vault-put` | Write a record. Consent deliberately does not cover it, so it is refused. |
+| `audit-list` | Enumerate audit entries in order, with a count of any that could not be decoded. |
+| `policy-set` | Replace the consent policy. Tenant identity only, and audited. |
+| `policy-get` | Read the policy in force, with the cluster time it was judged against. |
 
 ## Things that will bite you
 

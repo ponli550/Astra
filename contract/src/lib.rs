@@ -20,7 +20,7 @@
 
 extern crate alloc;
 
-pub const CONTRACT_VERSION: &str = "0.2.0";
+pub const CONTRACT_VERSION: &str = "0.3.0";
 
 wit_bindgen::generate!({
     world: "tenant-consent",
@@ -33,6 +33,7 @@ wit_bindgen::generate!({
 });
 
 pub mod audit;
+pub mod policy;
 pub mod vault;
 
 struct Component;
@@ -60,6 +61,19 @@ impl exports::z::tenant_consent::contracts::Guest for Component {
         let input = req.input.unwrap_or_else(|| b"{}".to_vec());
         audit::audit_list(&input)
     }
+
+    fn policy_set(
+        req: exports::z::tenant_consent::contracts::GenericInput,
+    ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
+        let input = req.input.ok_or("policy-set: missing input")?;
+        vault::policy_set(&input)
+    }
+
+    fn policy_get(
+        _req: exports::z::tenant_consent::contracts::GenericInput,
+    ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
+        vault::policy_get()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -70,6 +84,7 @@ export!(Component);
 /// runtime from `tenant-context`.
 pub const VAULT_TAIL: &str = "vault";
 pub const AUDIT_TAIL: &str = "audit";
+pub const POLICY_TAIL: &str = "policy";
 
 /// Build the full canonical KV map name for a tail.
 ///
