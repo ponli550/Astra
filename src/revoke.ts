@@ -17,7 +17,7 @@
  * here.
  */
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "./config.js";
-import { canonicalName, openAgentSession, openUserSession } from "./session.js";
+import { canonicalName, openAgentSession, openOwnerSession } from "./session.js";
 
 async function main() {
   if (!DECLARED_TENANT_DID) {
@@ -25,7 +25,7 @@ async function main() {
   }
 
   const agent = await openAgentSession();
-  const user = await openUserSession();
+  const user = await openOwnerSession();
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
 
   const before = await user.client.getMemberDelegation();

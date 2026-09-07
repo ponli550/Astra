@@ -16,7 +16,13 @@ import {
   type WasmComponent,
   type TrustAnchor,
 } from "@terminal3/t3n-sdk";
-import { DECLARED_TENANT_DID, DECLARED_USER_DID, T3N_ENV, keys } from "./config.js";
+import {
+  DECLARED_TENANT_DID,
+  DECLARED_USER_DID,
+  T3N_ENV,
+  hasSeparateOwner,
+  keys,
+} from "./config.js";
 
 /** Loading the WASM component and the trust anchor is slow, so do it once. */
 let shared: Promise<{ wasmComponent: WasmComponent; trustAnchor: TrustAnchor }> | undefined;
@@ -70,7 +76,17 @@ export async function openSession(role: string, privateKey: string): Promise<Ses
 
 export const openTenantSession = () => openSession("tenant", keys.tenant);
 export const openAgentSession = () => openSession("agent", keys.agent);
-export const openUserSession = () => openSession("user", keys.user);
+
+/**
+ * Open a session for the data owner: the identity that grants the agent
+ * access, revokes it, and reads its own audit trail.
+ *
+ * With a third key this is a distinct identity. Without one it is the
+ * tenant, which is how the official reference is written. Either way the
+ * agent remains separate, and that is the separation the demo rests on.
+ */
+export const openOwnerSession = () =>
+  hasSeparateOwner ? openSession("owner", keys.user) : openSession("owner (tenant)", keys.tenant);
 
 /**
  * Build the control-plane client used to register contracts and create
@@ -122,10 +138,10 @@ export async function resolveGrantSubject(): Promise<string> {
   if (DECLARED_USER_DID) return DECLARED_USER_DID;
 
   console.warn(
-    "USER_DID is not set, so falling back to authenticating with USER_KEY to\n" +
-      "resolve it. A real agent is given this DID out of band and never holds\n" +
-      "the data owner's key. Run `npm run grant` to get the line to paste.",
+    "USER_DID is not set, so falling back to authenticating as the data owner\n" +
+      "to resolve it. A real agent is given this DID out of band and never holds\n" +
+      "the owner's key. Run `npm run grant` to get the line to paste.",
   );
-  const user = await openUserSession();
-  return user.did;
+  const owner = await openOwnerSession();
+  return owner.did;
 }

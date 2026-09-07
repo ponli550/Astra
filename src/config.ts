@@ -93,19 +93,49 @@ export const AUDIT_MAP_TAIL = "audit";
 export const GRANT_TTL_SECS = Number(optional("GRANT_TTL_SECS") ?? "900");
 
 export const keys = {
-  /** Tenant developer key. Owns the contract and pays to register it. */
+  /**
+   * Tenant developer key. Owns the contract and pays to register it,
+   * and acts as the data owner unless a separate owner key is set.
+   */
   get tenant(): string {
     return requiredKey("T3N_API_KEY");
   },
-  /** The agent's own key. Never the tenant's. */
+  /**
+   * The agent's own key. Never the tenant's.
+   *
+   * This is the one separation that cannot be collapsed. An identity
+   * granting itself is a self-grant, and a self-grant demonstrates
+   * nothing about delegated consent.
+   */
   get agent(): string {
     return requiredKey("AGENT_KEY");
   },
-  /** The data owner's key. Stands in for a real user in this demo. */
+  /** A separate data owner key. Optional; see `hasSeparateOwner`. */
   get user(): string {
     return requiredKey("USER_KEY");
   },
 };
+
+/**
+ * Whether a third identity acts as the data owner.
+ *
+ * The claim page issues one key per work email, so three identities
+ * means three addresses. Two is enough: the official reference runs its
+ * grant as the tenant and sets the grant subject to the tenant's
+ * identity, so in that model the data owner is the tenant developer.
+ *
+ * When there is no third key the tenant plays both roles. The demo then
+ * reads as a developer delegating to their own agent rather than a third
+ * party delegating to someone else's. The mechanism, the enforcement and
+ * the audit trail are identical, so this costs narration, not substance.
+ */
+export const hasSeparateOwner = ((): boolean => {
+  const value = optional("USER_KEY");
+  if (value === undefined) return false;
+  // An unreplaced template placeholder means "not set", not "set badly".
+  if (value === "0x..." || /^0x\.+$/.test(value)) return false;
+  return true;
+})();
 
 /**
  * The tenant DID from `.env`, used only to cross-check the value the
