@@ -1,0 +1,16 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Consent Vault Agent",
+  "description": "Reads records from a consent-gated data vault on the T3 Network. Every access is evaluated inside a trusted execution environment against a policy the data owner controls, and every attempt is recorded with provenance the agent cannot forge. Drives the vault through Model Context Protocol tools; holds no standing access.",
+  "services": [
+    {
+      "name": "DID",
+      "endpoint": "did:t3n:6a8101aff9bcf0a85803d805256e92aab0b06d07",
+      "version": "v1"
+    }
+  ],
+  "x402Support": false,
+  "active": true,
+  "registrations": [],
+  "supportedTrust": ["tee-attestation"]
+}

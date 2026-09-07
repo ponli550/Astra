@@ -6,6 +6,7 @@
   "description": "Auditable-consent agent demo on the T3N Agent Developer Kit",
   "scripts": {
     "whoami": "tsx src/whoami.ts",
+    "verify": "tsx src/verify.ts",
     "deploy": "tsx src/deploy.ts",
     "demo": "./demo.sh",
     "policy": "tsx src/policy.ts show",
@@ -22,7 +23,9 @@
     "contract:build": "cd contract && cargo build --target wasm32-wasip2 --release",
     "contract:wit": "wasm-tools component wit contract/target/wasm32-wasip2/release/z_tenant_consent.wasm",
     "contract:test": "cd contract && cargo test --target aarch64-apple-darwin",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "agent:mint": "tsx src/agent-mint.ts",
+    "agent:probe": "tsx src/agent-probe.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
