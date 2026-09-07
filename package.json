@@ -1,0 +1,47 @@
+{
+  "name": "xendit-t3n-consent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Auditable-consent agent demo on the T3N Agent Developer Kit",
+  "scripts": {
+    "whoami": "tsx src/whoami.ts",
+    "verify": "tsx src/verify.ts",
+    "deploy": "tsx src/deploy.ts",
+    "demo": "./demo.sh",
+    "policy": "tsx src/policy.ts show",
+    "policy:allow": "tsx src/policy.ts allow",
+    "policy:deny": "tsx src/policy.ts deny",
+    "delegate": "tsx src/delegate.ts",
+    "grant": "tsx src/grant.ts",
+    "invoke": "tsx src/invoke.ts",
+    "audit": "tsx src/audit.ts",
+    "revoke": "tsx src/revoke.ts",
+    "monitor": "tsx src/monitor/index.tsx",
+    "mcp": "tsx src/mcp/server.ts",
+    "mcp:probe": "tsx src/mcp/probe.ts",
+    "agent:mint": "tsx src/agent-mint.ts",
+    "agent:probe": "tsx src/agent-probe.ts",
+    "test": "tsx --test src/**/*.test.ts",
+    "contract:build": "cd contract && cargo build --target wasm32-wasip2 --release",
+    "contract:wit": "wasm-tools component wit contract/target/wasm32-wasip2/release/z_tenant_consent.wasm",
+    "contract:test": "cd contract && cargo test --target aarch64-apple-darwin",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@terminal3/t3n-sdk": "5.2.0",
+    "dotenv": "^17.2.3",
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.18",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
