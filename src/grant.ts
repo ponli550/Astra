@@ -23,6 +23,12 @@ export const GRANTED_FUNCTIONS = ["vault-read", "audit-list"];
 /** Functions the agent is NOT granted, used to show the scope is real. */
 export const WITHHELD_FUNCTIONS = ["vault-put"];
 
+/**
+ * The read the owner self-grants so their own console keeps working
+ * after the agent's grant is revoked.
+ */
+export const AUDIT_FUNCTION = "audit-list";
+
 async function main() {
   if (!DECLARED_TENANT_DID) {
     throw new Error("DID is not set in .env. It names the tenant that owns the contract.");
@@ -69,6 +75,25 @@ async function main() {
   // document write replaces the whole policy instead, which silently
   // revokes everything not restated.
   const { preservedRows } = await user.client.updateMemberDelegation(grant);
+
+  // The owner also grants themselves read access to their own audit
+  // trail. Without this the monitor would have to read the trail through
+  // the agent's grant, so revoking the agent would blind the very
+  // console you revoke from. The owner's console must not depend on the
+  // authority it can withdraw.
+  //
+  // No window: the data owner's access to their own record of who
+  // touched their data should not expire on a timer.
+  const ownerGrant: BoundGrant = {
+    grantee: user.did,
+    contract_id: contractName,
+    functions: [AUDIT_FUNCTION],
+    scopes: [],
+    allowed_hosts: [],
+    version_req: version,
+  };
+  await user.client.updateMemberDelegation(ownerGrant);
+  console.log(`\nself-grant written for the owner's console: ${AUDIT_FUNCTION}`);
 
   console.log(`\ngrant written.`);
   if (preservedRows.length > 0) {
