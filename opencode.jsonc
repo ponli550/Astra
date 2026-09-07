@@ -7,6 +7,10 @@
   // The server holds the agent's key only. It never holds the tenant's
   // key or the data owner's key, and the identity whose grant authorises
   // each call comes from .env, exactly as a real agent would receive it.
+  // Pinned so the TUI opens straight to a prompt instead of a model picker,
+  // which matters when the session is being recorded. One of the models
+  // OpenCode offers at no cost; verified to drive the vault tools correctly.
+  "model": "opencode/big-pickle",
   "mcp": {
     "t3n-consent-vault": {
       "type": "local",

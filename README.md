@@ -9,21 +9,25 @@ with provenance the caller cannot forge.
 Built for the T3 Agent Developer Kit hackathon. Track: **private data access
 with auditable consent**.
 
-## Ninety seconds of it working 🎬
+## Two minutes of it working 🎬
 
-![Live demo](docs/media/demo.gif)
+![Agent beside the owner's console](docs/media/demo-agent.gif)
 
-*Real run against testnet, generated from a script rather than captured, so
-it re-renders when the code changes. Consent withdrawn, so the read is refused.
-Consent granted, so the read is served. The write is refused anyway, because
-consent covers reading only. Then the enclave's own record of all of it.*
+*Real run against testnet, nothing staged. Left, an agent reads the record
+under live consent and reports it. Right, the owner withdraws consent with one
+key. The agent asks again and is refused inside the enclave. Notice the agent
+guesses at the reason, while the console shows the actual cause: the policy
+went to zero callers. Left is what the agent claims. Right is what the enclave
+recorded.*
 
-```bash
-npm run demo          # the same sequence live, about seventy seconds
-vhs docs/demo.tape    # re-render the recording to docs/media/
-```
+The agent is [OpenCode](https://opencode.ai) on a free model, driving the vault
+through Model Context Protocol tools. The console is `npm run monitor`. The
+recording is generated from [docs/demo-agent.tape](docs/demo-agent.tape), so it
+re-renders when the code changes rather than going stale.
 
-There is a spoken walkthrough script in [docs/narration.md](docs/narration.md).
+A scripts-only run of the same sequence is at
+[docs/media/demo.gif](docs/media/demo.gif), and a spoken walkthrough script is
+in [docs/narration.md](docs/narration.md).
 
 ## The claim, stated narrowly
 
