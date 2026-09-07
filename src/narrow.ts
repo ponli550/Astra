@@ -6,7 +6,7 @@
  * Casting would hide a wire change behind a compile-time lie, so these
  * check the fields actually read and name what was missing.
  */
-import type { MapResponse, TenantMeResponse } from "@terminal3/t3n-sdk";
+import type { TenantMeResponse } from "@terminal3/t3n-sdk";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,10 +34,22 @@ export function asTenantMe(value: unknown): Pick<TenantMeResponse, "tenant" | "s
   return { tenant, status: status as TenantMeResponse["status"], label };
 }
 
-/** Narrow a `tenant.maps.create()` response to the fields this app reads. */
-export function asMapResponse(value: unknown): Pick<MapResponse, "name" | "tail"> {
-  return {
-    name: requireString(value, "maps.create", "name"),
-    tail: requireString(value, "maps.create", "tail"),
-  };
+/**
+ * Narrow a `tenant.maps.create()` response to the canonical map name.
+ *
+ * The SDK exports a `MapResponse` type claiming `name`, `tail`,
+ * `visibility`, `writers` and `readers`, but the wire actually returns a
+ * single `map_name`. Trusting the exported type produced a confusing
+ * failure AFTER the map had already been created, so this reads what the
+ * server really sends and falls back to the tail that was requested.
+ */
+export function mapNameFrom(value: unknown, requestedTail: string): string {
+  if (isRecord(value) && typeof value["map_name"] === "string") {
+    return value["map_name"];
+  }
+  // Older or future shapes may use `name`; either is enough to report.
+  if (isRecord(value) && typeof value["name"] === "string") {
+    return value["name"];
+  }
+  return requestedTail;
 }

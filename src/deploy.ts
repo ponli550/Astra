@@ -13,10 +13,11 @@ import {
   CONTRACT_TAIL,
   CONTRACT_VERSION,
   DEMO_RECORD,
+  KNOWN_CONTRACT_ID,
   VAULT_MAP_TAIL,
   WASM_PATH,
 } from "./config.js";
-import { asMapResponse } from "./narrow.js";
+import { mapNameFrom } from "./narrow.js";
 import { openTenantClient } from "./session.js";
 
 async function main() {
@@ -34,16 +35,37 @@ async function main() {
   }
   console.log(`wasm   ${WASM_PATH} (${(wasm.byteLength / 1024).toFixed(0)} KiB)`);
 
-  const registered = await tenant.contracts.register({
-    tail: CONTRACT_TAIL,
-    version: CONTRACT_VERSION,
-    wasm: new Uint8Array(wasm),
-  });
-  const contractId = registered.contract_id;
+  let contractId: number;
+  try {
+    const registered = await tenant.contracts.register({
+      tail: CONTRACT_TAIL,
+      version: CONTRACT_VERSION,
+      wasm: new Uint8Array(wasm),
+    });
+    contractId = registered.contract_id;
+    console.log(`\nregistered ${registered.name}`);
+    console.log(`  version     ${CONTRACT_VERSION}`);
+    console.log(`  contract_id ${contractId}`);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!/not higher than current version/i.test(detail)) throw error;
 
-  console.log(`\nregistered ${registered.name}`);
-  console.log(`  version     ${CONTRACT_VERSION}`);
-  console.log(`  contract_id ${contractId}`);
+    // This version is already registered. Re-registering would allocate
+    // a new id and churn every map rule for nothing, so reuse the known
+    // one instead. There is no API that returns a tail's current
+    // contract id, which is exactly why it has to come from config.
+    if (KNOWN_CONTRACT_ID === undefined) {
+      throw new Error(
+        `${CONTRACT_TAIL} is already registered at version ${CONTRACT_VERSION}.\n` +
+          `Either bump CONTRACT_VERSION to register a new build, or set\n` +
+          `CONTRACT_ID to the id the earlier deploy printed so this run can\n` +
+          `finish provisioning the maps. There is no API that looks it up.`,
+      );
+    }
+    contractId = KNOWN_CONTRACT_ID;
+    console.log(`\n${CONTRACT_TAIL} already registered at ${CONTRACT_VERSION}`);
+    console.log(`  reusing contract_id ${contractId} from CONTRACT_ID`);
+  }
   console.log(
     `\nRecord that contract_id. Re-registering this tail allocates a new id,\n` +
       `and there is no API to look the current one up, so map rules scoped to\n` +
@@ -61,7 +83,7 @@ async function main() {
         writers: { only: [contractId] },
         readers: { only: [contractId] },
       });
-      console.log(`created map ${asMapResponse(created).name}`);
+      console.log(`created map ${mapNameFrom(created, tail)}`);
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
       if (!/already exists/i.test(detail)) throw error;
