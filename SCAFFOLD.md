@@ -28,6 +28,7 @@ audit entry.
 | `contract/wit/deps/` | Vendored host interface definitions |
 | `src/` | TypeScript orchestration, one script per step |
 | `src/mcp/` | Tool server that lets an agent drive the contract |
+| `src/monitor/` | The data owner's console: grant state, audit trail, revoke |
 | `opencode.jsonc` | Registers the tool server with OpenCode |
 
 The contract imports only `tenant-context`, `logging` and `kv-store`, so it
@@ -58,6 +59,8 @@ npm run grant             # USER authorises the agent, time-boxed
 npm run invoke            # agent reads the record; withheld function is refused
 npm run audit             # read back the audit trail
 npm run revoke            # remove the grant; invoke fails until you re-grant
+npm run monitor           # the owner's console, run beside opencode
+npm run test              # display-helper tests, no credentials needed
 ```
 
 `npm run contract:wit` prints the component's interface if you want to confirm
@@ -95,6 +98,44 @@ The server holds the agent's key and nothing else. It never holds the tenant's
 key or the data owner's key. A refusal comes back as a readable tool result
 rather than an exception, because one thrown error can take down an agent loop
 on a tool's first failure.
+
+## The owner's console
+
+Run this beside OpenCode. The agent's own account of what it did sits on one
+side, the enclave's record of what actually happened on the other.
+
+```bash
+npm run monitor
+```
+
+```
++- opencode -----------------+ +- consent monitor ---------+
+| > check the patient record | | GRANT    active           |
+| * vault_read(medical-1)    | | agent    did:t3n:1a2b...  |
+|   -> hypertension stage 1  | | subject  did:t3n:9f0c...  |
+| * vault_put(smuggled-1)    | | allowed  vault-read       |
+|   x refused by the node    | |          audit-list       |
+|                            | | expires  11m42s [####--]  |
+| I could read but not write.| |                           |
+| Read is all the grant      | | ENCLAVE AUDIT TRAIL       |
+| covers.                    | | 7  served  vault-read     |
+|                            | | 8  denied  no such record |
+|                            | | [r] revoke   [q] quit     |
++----------------------------+ +---------------------------+
+   what the agent CLAIMS          what the ENCLAVE RECORDED
+```
+
+Press `r` to withdraw the agent's grant and watch its next call fail, with no
+redeploy and no code change. Restore it with `npm run grant`.
+
+The console authenticates as the **data owner**, not the agent, and reads the
+trail through the owner's own self-grant. That is why `npm run grant` issues a
+second grant to the user for `audit-list`. Reading the trail through the
+agent's grant would mean revoking the agent blinded the very console you revoke
+from, so the owner's console must not depend on the authority it can withdraw.
+
+The console is read-mostly. Its one write is the revoke, which is the owner's
+decision to make.
 
 ## Contract functions
 

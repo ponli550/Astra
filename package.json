@@ -11,8 +11,10 @@
     "invoke": "tsx src/invoke.ts",
     "audit": "tsx src/audit.ts",
     "revoke": "tsx src/revoke.ts",
+    "monitor": "tsx src/monitor/index.tsx",
     "mcp": "tsx src/mcp/server.ts",
     "mcp:probe": "tsx src/mcp/probe.ts",
+    "test": "tsx --test src/**/*.test.ts",
     "contract:build": "cd contract && cargo build --target wasm32-wasip2 --release",
     "contract:wit": "wasm-tools component wit contract/target/wasm32-wasip2/release/z_tenant_consent.wasm",
     "contract:test": "cd contract && cargo test --target aarch64-apple-darwin",
@@ -21,10 +23,13 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@terminal3/t3n-sdk": "5.2.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "@types/react": "^19.2.18",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
