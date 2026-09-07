@@ -87,10 +87,40 @@ pub fn audit_list(input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-use crate::host::interfaces::{kv_store, logging};
+use crate::host::{
+    interfaces::{kv_store, logging},
+    tenant::tenant_context,
+};
+
+/// Who may read the trail.
+///
+/// The owner always: a data owner's access to the record of who touched
+/// their data must not depend on a consent they can withdraw, or
+/// revoking an agent would blind the console used to revoke it. Anyone
+/// else only if consent names `audit-list` for them, because the trail
+/// carries record ids and stated purposes, which are themselves data.
+#[cfg(target_arch = "wasm32")]
+fn may_read_trail() -> Result<(), String> {
+    let caller = match tenant_context::calling_user_did() {
+        Some(did) => hex::encode(&did),
+        None => return Err("audit-list: no calling user bound to this execution".to_string()),
+    };
+    let tenant = hex::encode(tenant_context::tenant_did());
+    if caller.eq_ignore_ascii_case(&tenant) {
+        return Ok(());
+    }
+    let gate = crate::policy::load()?;
+    crate::policy::evaluate(&gate, &caller, "audit-list", tenant_context::cluster_timestamp_secs())
+        .map_err(|d| format!("audit-list: {}", d.reason()))
+}
 
 #[cfg(target_arch = "wasm32")]
 fn audit_list_wasm(limit: u32) -> Result<AuditListResp, String> {
+    // Unlike a vault read, a refused trail read is an error rather than
+    // a recorded denial: a caller with no standing to see the trail has
+    // no business leaving marks in it either.
+    may_read_trail()?;
+
     let map = crate::map_name(crate::AUDIT_TAIL);
 
     // Half-open [start, end). Keys are ASCII digits, so a single 0xff
