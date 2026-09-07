@@ -10,6 +10,7 @@
     "grant": "tsx src/grant.ts",
     "invoke": "tsx src/invoke.ts",
     "audit": "tsx src/audit.ts",
+    "revoke": "tsx src/revoke.ts",
     "contract:build": "cd contract && cargo build --target wasm32-wasip2 --release",
     "contract:wit": "wasm-tools component wit contract/target/wasm32-wasip2/release/z_tenant_consent.wasm",
     "contract:test": "cd contract && cargo test --target aarch64-apple-darwin",
