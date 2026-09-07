@@ -1,0 +1,5 @@
+# Default build target. `cargo test` must override it, because host
+# imports only resolve on wasm32: use `cargo test --target <native>`
+# (npm run contract:test does this for you).
+[build]
+target = "wasm32-wasip2"
