@@ -20,7 +20,7 @@
 
 extern crate alloc;
 
-pub const CONTRACT_VERSION: &str = "0.3.1";
+pub const CONTRACT_VERSION: &str = "0.4.1";
 
 wit_bindgen::generate!({
     world: "tenant-consent",
@@ -73,6 +73,13 @@ impl exports::z::tenant_consent::contracts::Guest for Component {
         _req: exports::z::tenant_consent::contracts::GenericInput,
     ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
         vault::policy_get()
+    }
+
+    fn policy_delegate(
+        req: exports::z::tenant_consent::contracts::GenericInput,
+    ) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
+        let input = req.input.ok_or("policy-delegate: missing input")?;
+        vault::policy_delegate(&input)
     }
 }
 

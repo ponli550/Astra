@@ -78,6 +78,32 @@ Verified: with the grant fully revoked, reads still succeeded. So the contract
 enforces consent itself, which is the pattern Terminal 3's own reference
 implementation names for itself.
 
+## Consent chains
+
+A root caller may hand part of its permission to another identity. The
+delegatee holds the **intersection** of what it was given and what its
+delegator still holds, resolved back to the root at every call. Two properties
+fall out of that definition rather than being enforced separately:
+
+- **Nobody can hand on more than they hold.** A widening attempt is refused
+  inside the enclave at the moment of delegation, and recorded. Even a widened
+  delegation that somehow reached storage would confer nothing at use.
+- **Withdrawing consent at the root empties every chain beneath it**, with
+  nothing deleted. An intersection with nothing is nothing.
+
+Verified live on testnet as the tenant: a subset handoff served, a widening
+attempt refused with its reason, both in the trail. Two org-owned agents are
+minted for the live agent-to-agent run; their calls are blocked on a credit
+grant from Terminal 3, since minted agents start at zero and every call bills
+the caller.
+
+```bash
+CALLER=tenant npm run delegate          # root hands agent B vault-read only
+CALLER=tenant npm run delegate -- widen # tries to add vault-put; refused
+CALLER=second npm run invoke            # B reads under the delegation (needs credits)
+npm run policy:deny                     # root withdrawn; B's permission empties
+```
+
 ## Run it
 
 ```bash

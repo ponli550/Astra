@@ -10,12 +10,8 @@
  */
 import { getContractVersion, getNodeUrl, type BoundGrant } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "../config.js";
-import {
-  canonicalName,
-  openCallerSession,
-  openOwnerSession,
-  openTenantSession,
-} from "../session.js";
+import { openCaller, type Caller } from "../caller.js";
+import { canonicalName, openOwnerSession, openTenantSession } from "../session.js";
 import type { Session } from "../session.js";
 
 export interface AuditEntry {
@@ -44,11 +40,20 @@ export interface AuditSnapshot {
  * this contract makes no outbound call. The policy is evaluated inside
  * the enclave on every call.
  */
+export interface DelegationView {
+  from: string;
+  to: string;
+  functions: string[];
+  validUntilSecs?: number;
+}
+
 export interface PolicyView {
   version: number;
   allowedCallers: string[];
   allowedFunctions: string[];
   validUntilSecs?: number;
+  /** Handoffs beneath the root; each holds the intersection with its delegator. */
+  delegations: DelegationView[];
   expired: boolean;
   /** Cluster-pinned time the contract answered against. */
   nowSecs: number;
@@ -79,7 +84,7 @@ export interface Snapshot {
 }
 
 interface Ready {
-  agent: Session;
+  agent: Caller;
   owner: Session;
   /** Policy administration is tenant-scoped, checked inside the enclave. */
   tenant: Session;
@@ -95,7 +100,7 @@ async function connect() {
     throw new Error("DID is not set. It names the tenant that owns the contract.");
   }
   const [agent, owner, tenant] = await Promise.all([
-    openCallerSession(),
+    openCaller(),
     openOwnerSession(),
     openTenantSession(),
   ]);
@@ -160,15 +165,24 @@ const NO_POLICY: PolicyView = {
   version: 0,
   allowedCallers: [],
   allowedFunctions: [],
+  delegations: [],
   expired: false,
   nowSecs: 0,
 };
+
+interface DelegationWire {
+  from: string;
+  to: string;
+  functions: string[];
+  valid_until_secs: number | null;
+}
 
 interface PolicyWire {
   version: number;
   allowed_callers: string[];
   allowed_functions: string[];
   valid_until_secs: number | null;
+  delegations?: DelegationWire[];
   now_secs: number;
   expired: boolean;
 }
@@ -178,6 +192,11 @@ function toPolicyView(wire: PolicyWire): PolicyView {
     version: wire.version,
     allowedCallers: wire.allowed_callers,
     allowedFunctions: wire.allowed_functions,
+    delegations: (wire.delegations ?? []).map((d) => {
+      const v: DelegationView = { from: d.from, to: d.to, functions: d.functions };
+      if (d.valid_until_secs !== null) v.validUntilSecs = d.valid_until_secs;
+      return v;
+    }),
     expired: wire.expired,
     nowSecs: wire.now_secs,
   };

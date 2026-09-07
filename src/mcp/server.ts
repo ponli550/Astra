@@ -25,43 +25,28 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
 import { z } from "zod";
-import { CONTRACT_TAIL, DECLARED_TENANT_DID, T3N_ENV } from "../config.js";
-import { canonicalName, openCallerSession, resolveGrantSubject } from "../session.js";
-import type { Session } from "../session.js";
+import { T3N_ENV } from "../config.js";
+import { openCaller, type Caller } from "../caller.js";
+import { resolveGrantSubject } from "../session.js";
 
-/** Authentication is slow, so one session is shared across tool calls. */
-let cached: Promise<{ agent: Session; contract: string; version: string; subject: string }> | undefined;
+/** Authentication is slow, so one caller is shared across tool calls. */
+let cached: Promise<{ caller: Caller; subject: string }> | undefined;
 
 function context() {
   cached ??= (async () => {
-    if (!DECLARED_TENANT_DID) {
-      throw new Error("DID is not set. It names the tenant that owns the contract.");
-    }
-    const agent = await openCallerSession();
-    const contract = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
-    const [version, subject] = await Promise.all([
-      getContractVersion(getNodeUrl(), contract),
-      resolveGrantSubject(),
-    ]);
-    return { agent, contract, version, subject };
+    const [caller, subject] = await Promise.all([openCaller(), resolveGrantSubject()]);
+    return { caller, subject };
   })();
   return cached;
 }
 
 /** One call into the contract, always naming the grant subject. */
 async function invoke(functionName: string, input: unknown): Promise<unknown> {
-  const { agent, contract, version, subject } = await context();
-  return agent.client.executeAndDecode({
-    contract_id: contract,
-    contract_version: version,
-    function_name: functionName,
-    // Omitting this makes the node check the agent's own grants, which
-    // are empty, and the refusal then looks like a broken allowlist.
-    pii_did: subject,
-    input,
-  });
+  const { caller, subject } = await context();
+  // Omitting the subject makes the node check the caller's own grants,
+  // and the refusal then looks like a broken allowlist.
+  return caller.call(functionName, input, subject);
 }
 
 /**
@@ -106,13 +91,14 @@ server.registerTool(
   },
   async () => {
     try {
-      const { agent, contract, version, subject } = await context();
+      const { caller, subject } = await context();
       return asResult({
         environment: T3N_ENV,
-        agent_did: agent.did,
+        agent_did: caller.did,
+        transport: caller.kind,
         grant_subject: subject,
-        contract,
-        contract_version: version,
+        contract: caller.contract,
+        contract_version: caller.version,
         note:
           "This caller holds no standing access. Every call is evaluated inside the " +
           "enclave against a consent policy that names permitted callers and " +

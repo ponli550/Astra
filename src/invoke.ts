@@ -23,9 +23,9 @@
  *   2. Read a record that does not exist. Denied, and still audited.
  *   3. Write, which consent does not cover. Refused inside the enclave.
  */
-import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
-import { CONTRACT_TAIL, DECLARED_TENANT_DID, DEMO_RECORD } from "./config.js";
-import { canonicalName, openCallerSession, resolveGrantSubject } from "./session.js";
+import { DECLARED_TENANT_DID, DEMO_RECORD } from "./config.js";
+import { openCaller } from "./caller.js";
+import { resolveGrantSubject } from "./session.js";
 
 interface VaultReadResponse {
   record_id: string;
@@ -47,27 +47,19 @@ async function main() {
     throw new Error("DID is not set in .env. It names the tenant that owns the contract.");
   }
 
-  const caller = await openCallerSession();
-  const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
-  const version = await getContractVersion(getNodeUrl(), contractName);
+  const caller = await openCaller();
 
   // Whose grant this call is checked against. Omitting it makes the node
   // check the caller's own grants, and the resulting denial reads like a
   // misconfigured allowlist.
   const subject = await resolveGrantSubject();
 
-  console.log(`caller   ${caller.did}`);
+  console.log(`caller   ${caller.did}   (${caller.role}, ${caller.kind})`);
   console.log(`subject  ${subject}   (whose grant authorises this)`);
-  console.log(`contract ${contractName}@${version}\n`);
+  console.log(`contract ${caller.contract}@${caller.version}\n`);
 
   const call = <T,>(functionName: string, input: unknown) =>
-    caller.client.executeAndDecode<T>({
-      contract_id: contractName,
-      contract_version: version,
-      function_name: functionName,
-      pii_did: subject,
-      input,
-    });
+    caller.call<T>(functionName, input, subject);
 
   // --- a record that exists ----------------------------------------
   const served = await call<VaultReadResponse>("vault-read", {

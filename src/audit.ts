@@ -8,9 +8,9 @@
  * number, the cluster timestamp, the contract id and the calling
  * identity cannot be forged by whoever made the call.
  */
-import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
-import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "./config.js";
-import { canonicalName, openCallerSession, resolveGrantSubject } from "./session.js";
+import { DECLARED_TENANT_DID } from "./config.js";
+import { openCaller } from "./caller.js";
+import { resolveGrantSubject } from "./session.js";
 
 interface AuditEntry {
   seq_no: number;
@@ -36,20 +36,12 @@ async function main() {
     throw new Error("DID is not set in .env. It names the tenant that owns the contract.");
   }
 
-  const agent = await openCallerSession();
-  const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
-  const version = await getContractVersion(getNodeUrl(), contractName);
+  const caller = await openCaller();
   const subject = await resolveGrantSubject();
 
-  const result = await agent.client.executeAndDecode<AuditListResponse>({
-    contract_id: contractName,
-    contract_version: version,
-    function_name: "audit-list",
-    // Same reason as the read: this trail belongs to the data owner's
-    // grant, not to the agent's own.
-    pii_did: subject,
-    input: { limit: 100 },
-  });
+  // Same reason as the read: this trail belongs to the data owner's
+  // consent, not to the caller's own.
+  const result = await caller.call<AuditListResponse>("audit-list", { limit: 100 }, subject);
 
   console.log(`${result.count} audit entr${result.count === 1 ? "y" : "ies"}\n`);
 

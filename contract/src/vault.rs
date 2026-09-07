@@ -130,7 +130,7 @@ pub fn vault_read(input: &[u8]) -> Result<Vec<u8>, String> {
 use crate::{
     audit::{self, AuditEntry},
     host::{interfaces::kv_store, tenant::tenant_context},
-    policy::{self, Policy},
+    policy::{self, Delegation, Policy},
 };
 
 /// Read the calling user DID the node bound to this execution.
@@ -404,6 +404,7 @@ pub struct PolicyGetResp {
     pub allowed_callers: Vec<String>,
     pub allowed_functions: Vec<String>,
     pub valid_until_secs: Option<u64>,
+    pub delegations: Vec<Delegation>,
     /// Cluster-pinned time the answer was computed against.
     pub now_secs: u64,
     pub expired: bool,
@@ -412,6 +413,9 @@ pub struct PolicyGetResp {
 /// A caller may only be listed as 40 hex characters, the shape a DID
 /// decodes to. Rejecting anything else keeps a typo from silently
 /// producing a policy that matches nobody.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::policy::Delegation;
+
 pub fn validate_caller_hex(caller: &str) -> Result<(), String> {
     if caller.len() != 40 || !caller.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!(
@@ -483,6 +487,9 @@ fn policy_set_wasm(req: PolicySetReq) -> Result<PolicySetResp, String> {
         allowed_callers: req.allowed_callers,
         allowed_functions: req.allowed_functions,
         valid_until_secs: req.valid_until_secs,
+        // A rewrite of the root clears every chain beneath it. Whatever
+        // was handed on was handed on under the previous consent.
+        delegations: Vec::new(),
         // Monotonic, so a reader can tell a fresh document from a stale
         // one, and so version 0 keeps meaning "nothing in force".
         version: existing.version.saturating_add(1),
@@ -529,6 +536,7 @@ fn policy_get_wasm() -> Result<PolicyGetResp, String> {
         allowed_callers: current.allowed_callers,
         allowed_functions: current.allowed_functions,
         valid_until_secs: current.valid_until_secs,
+        delegations: current.delegations,
         now_secs,
         expired,
     })
@@ -565,5 +573,160 @@ mod policy_admin_tests {
     #[test]
     fn policy_set_rejects_non_json() {
         assert!(policy_set(b"not json").unwrap_err().contains("bad input"));
+    }
+}
+
+// ---------------------------------------------------------------------
+// Delegation: handing part of one's own permission to another identity
+// ---------------------------------------------------------------------
+
+/// `policy-delegate` input. The delegator is never in the input: it is
+/// the calling identity, minted by the node, so nobody can delegate on
+/// someone else's behalf.
+#[derive(Debug, Deserialize)]
+pub struct PolicyDelegateReq {
+    /// Hex body of the delegatee's DID.
+    pub to: String,
+    pub functions: Vec<String>,
+    #[serde(default)]
+    pub valid_until_secs: Option<u64>,
+}
+
+/// Outcome of a handoff. A refused handoff is a successful response
+/// carrying `denied`, for the same reason a refused read is: the host
+/// rolls back a failed call's writes, and a refused widening attempt is
+/// exactly the kind of thing the trail must keep.
+#[derive(Debug, Serialize)]
+pub struct PolicyDelegateResp {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub version: u32,
+    pub from: String,
+    pub to: String,
+    pub functions: Vec<String>,
+    pub valid_until_secs: Option<u64>,
+    /// Depth the delegatee will sit at: 1 below a root caller.
+    pub depth: u32,
+    pub audit_key: String,
+}
+
+pub fn policy_delegate(input: &[u8]) -> Result<Vec<u8>, String> {
+    let req: PolicyDelegateReq =
+        serde_json::from_slice(input).map_err(|e| format!("policy-delegate: bad input: {e}"))?;
+    validate_caller_hex(&req.to).map_err(|e| format!("policy-delegate: {e}"))?;
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resp = policy_delegate_wasm(req)?;
+        serde_json::to_vec(&resp).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = req;
+        Err("policy_delegate reaches the host and only runs on the wasm32 target".to_string())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn policy_delegate_wasm(req: PolicyDelegateReq) -> Result<PolicyDelegateResp, String> {
+    // The delegator is whoever the node says is calling. Not the tenant
+    // check: any currently permitted caller may hand on a subset.
+    let mut entry = base_entry("policy-delegate", "consent", None)?;
+    let from = entry.caller_did.clone();
+    let now = entry.at_secs;
+
+    let mut current = policy::load()?;
+
+    match policy::validate_delegation(&current, &from, &req.to, &req.functions, req.valid_until_secs, now) {
+        Err(refusal) => {
+            // Refused inside the enclave, and recorded: an attempt to widen
+            // is worth more in the trail than a successful narrowing.
+            entry.outcome = STATUS_DENIED.to_string();
+            entry.reason = refusal.reason();
+            let audit_key = audit::append(&entry)?;
+            Ok(PolicyDelegateResp {
+                status: STATUS_DENIED,
+                reason: Some(entry.reason),
+                version: current.version,
+                from,
+                to: req.to,
+                functions: req.functions,
+                valid_until_secs: req.valid_until_secs,
+                depth: 0,
+                audit_key,
+            })
+        }
+        Ok(held) => {
+            // Replace any earlier handoff from this delegator to this
+            // delegatee, so re-delegating narrows rather than accumulates.
+            current
+                .delegations
+                .retain(|d| !(d.from.eq_ignore_ascii_case(&from) && d.to.eq_ignore_ascii_case(&req.to)));
+            current.delegations.push(Delegation {
+                from: from.clone(),
+                to: req.to.clone(),
+                functions: req.functions.clone(),
+                valid_until_secs: req.valid_until_secs,
+            });
+            current.version = current.version.saturating_add(1);
+            policy::store(&current)?;
+
+            entry.reason = alloc::format!(
+                "version {} : {} -> {} handed [{}] until {}, depth {}",
+                current.version,
+                &from[..8],
+                &req.to[..8],
+                req.functions.join(","),
+                req.valid_until_secs.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+                held.depth + 1
+            );
+            let audit_key = audit::append(&entry)?;
+
+            Ok(PolicyDelegateResp {
+                status: STATUS_SERVED,
+                reason: None,
+                version: current.version,
+                from,
+                to: req.to,
+                functions: req.functions,
+                valid_until_secs: req.valid_until_secs,
+                depth: held.depth + 1,
+                audit_key,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod delegate_input_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_malformed_delegatee_before_reaching_the_host() {
+        let input = serde_json::to_vec(&serde_json::json!({ "to": "not-a-did", "functions": ["vault-read"] })).unwrap();
+        assert!(policy_delegate(&input).unwrap_err().contains("40 hex characters"));
+    }
+
+    #[test]
+    fn rejects_non_json() {
+        assert!(policy_delegate(b"nope").unwrap_err().contains("bad input"));
+    }
+
+    #[test]
+    fn the_delegator_is_not_accepted_from_the_input() {
+        // No `from` field exists on the request, so a payload naming one
+        // is simply not the shape the contract reads. The identity comes
+        // from the node.
+        let input = serde_json::to_vec(&serde_json::json!({
+            "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "functions": ["vault-read"]
+        })).unwrap();
+        // Parses (unknown fields are ignored) and proceeds to the host
+        // path, which on the native target reports it cannot run.
+        let err = policy_delegate(&input).unwrap_err();
+        assert!(err.contains("only runs on the wasm32 target"));
     }
 }

@@ -12,6 +12,7 @@
     "policy": "tsx src/policy.ts show",
     "policy:allow": "tsx src/policy.ts allow",
     "policy:deny": "tsx src/policy.ts deny",
+    "delegate": "tsx src/delegate.ts",
     "grant": "tsx src/grant.ts",
     "invoke": "tsx src/invoke.ts",
     "audit": "tsx src/audit.ts",
@@ -19,13 +20,13 @@
     "monitor": "tsx src/monitor/index.tsx",
     "mcp": "tsx src/mcp/server.ts",
     "mcp:probe": "tsx src/mcp/probe.ts",
+    "agent:mint": "tsx src/agent-mint.ts",
+    "agent:probe": "tsx src/agent-probe.ts",
     "test": "tsx --test src/**/*.test.ts",
     "contract:build": "cd contract && cargo build --target wasm32-wasip2 --release",
     "contract:wit": "wasm-tools component wit contract/target/wasm32-wasip2/release/z_tenant_consent.wasm",
     "contract:test": "cd contract && cargo test --target aarch64-apple-darwin",
-    "typecheck": "tsc --noEmit",
-    "agent:mint": "tsx src/agent-mint.ts",
-    "agent:probe": "tsx src/agent-probe.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

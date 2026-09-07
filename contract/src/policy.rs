@@ -1,4 +1,5 @@
-//! Consent policy, enforced by this contract inside the enclave.
+//! Consent policy, enforced by this contract inside the enclave, with
+//! delegation chains that narrow and revoke by construction.
 //!
 //! # Why the contract decides, rather than the delegation layer
 //!
@@ -22,6 +23,19 @@
 //!   * the clock is the cluster-pinned timestamp, not wall clock, so a
 //!     caller cannot move an expiry.
 //!
+//! # Chains
+//!
+//! A root caller, one the owner listed directly, may delegate to another
+//! identity. The delegatee's effective permission is the intersection of
+//! what it was given and what its delegator itself still holds, resolved
+//! back to the root at every call. Two consequences fall out of that
+//! definition rather than being enforced separately:
+//!
+//!   * nobody can hand on more than they hold, because the intersection
+//!     cannot exceed either operand;
+//!   * withdrawing consent at the root empties every chain beneath it,
+//!     because an intersection with nothing is nothing.
+//!
 //! # What it does not claim
 //!
 //! Whoever can write the tenant's maps can rewrite this policy. The
@@ -31,20 +45,44 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Longest permitted chain below the root: owner -> A -> B. Deep chains
+/// are hard to reason about for the owner, and the cap also bounds the
+/// resolver's work per call.
+pub const MAX_DEPTH: u32 = 2;
+
+/// One handoff. `from` must itself be permitted at the time of use, or
+/// the delegation confers nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Delegation {
+    /// Hex DID of the delegator.
+    pub from: String,
+    /// Hex DID of the delegatee.
+    pub to: String,
+    /// Functions handed on. Intersected with the delegator's own at use.
+    pub functions: Vec<String>,
+    /// Optional cutoff. Intersected (min) with the delegator's own at use.
+    #[serde(default)]
+    pub valid_until_secs: Option<u64>,
+}
+
 /// The consent document, stored as one JSON value in the `policy` map.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
-    /// Hex-encoded caller DIDs permitted to call at all. Empty denies
-    /// everyone, which is the correct reading of "consent withdrawn"
-    /// rather than an error.
+    /// Hex-encoded caller DIDs permitted directly by the owner. Empty
+    /// denies everyone, which is the correct reading of "consent
+    /// withdrawn" rather than an error.
     #[serde(default)]
     pub allowed_callers: Vec<String>,
-    /// Function names those callers may invoke.
+    /// Function names root callers may invoke.
     #[serde(default)]
     pub allowed_functions: Vec<String>,
-    /// When permission lapses. Absent means no expiry.
+    /// When root permission lapses. Absent means no expiry.
     #[serde(default)]
     pub valid_until_secs: Option<u64>,
+    /// Handoffs beneath the root. Cleared whenever the owner rewrites
+    /// the document, so a fresh root consent starts with no chains.
+    #[serde(default)]
+    pub delegations: Vec<Delegation>,
     /// Bumped on each write and recorded in the audit trail, so a
     /// widening of permission is as visible as a use of it.
     #[serde(default)]
@@ -61,9 +99,19 @@ impl Policy {
             allowed_callers: Vec::new(),
             allowed_functions: Vec::new(),
             valid_until_secs: None,
+            delegations: Vec::new(),
             version: 0,
         }
     }
+}
+
+/// What a caller may do right now, after resolving its chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Effective {
+    pub functions: Vec<String>,
+    pub valid_until_secs: Option<u64>,
+    /// 0 for a root caller, 1 for its delegatee, and so on.
+    pub depth: u32,
 }
 
 /// Why a call was refused. Carried into the response and the audit entry.
@@ -79,18 +127,87 @@ impl Denial {
     pub fn reason(&self) -> String {
         match self {
             Denial::NoPolicy => "no consent policy is in force".to_string(),
-            Denial::CallerNotListed => "this caller is not permitted by the consent policy".to_string(),
+            Denial::CallerNotListed => {
+                "this caller is not permitted by the consent policy".to_string()
+            }
             Denial::FunctionNotListed => {
                 "the consent policy does not permit this function".to_string()
             }
             Denial::Expired {
                 valid_until_secs,
                 now_secs,
-            } => format!(
-                "consent lapsed at {valid_until_secs}, cluster time is {now_secs}"
-            ),
+            } => format!("consent lapsed at {valid_until_secs}, cluster time is {now_secs}"),
         }
     }
+}
+
+fn same_did(a: &str, b: &str) -> bool {
+    // A DID's identity is the bytes it decodes to, not the spelling of
+    // its hex.
+    a.eq_ignore_ascii_case(b)
+}
+
+fn min_expiry(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
+}
+
+fn intersect(a: &[String], b: &[String]) -> Vec<String> {
+    a.iter().filter(|f| b.contains(f)).cloned().collect()
+}
+
+/// Resolve what `caller` effectively holds, walking delegations back to
+/// the root and intersecting at each step.
+///
+/// Returns `None` when the caller has no path to a listed root. A
+/// delegation whose delegator is unlisted, expired, or itself resolves
+/// to nothing confers nothing, which is what makes revocation cascade.
+pub fn effective(policy: &Policy, caller: &str, now_secs: u64) -> Option<Effective> {
+    fn walk(policy: &Policy, who: &str, now: u64, depth: u32, seen: &mut Vec<String>) -> Option<Effective> {
+        if policy.allowed_callers.iter().any(|c| same_did(c, who)) {
+            return Some(Effective {
+                functions: policy.allowed_functions.clone(),
+                valid_until_secs: policy.valid_until_secs,
+                depth: 0,
+            });
+        }
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        if seen.iter().any(|s| same_did(s, who)) {
+            return None; // cycle: A -> B -> A confers nothing
+        }
+        seen.push(who.to_string());
+
+        // Several delegators may have handed to the same identity. Any
+        // one live chain is enough; take the first that resolves.
+        for d in policy.delegations.iter().filter(|d| same_did(&d.to, who)) {
+            if let Some(upstream) = walk(policy, &d.from, now, depth + 1, seen) {
+                // The delegator must itself be within time at the moment
+                // of use, or its handoffs are dead too.
+                if let Some(until) = upstream.valid_until_secs {
+                    if now >= until {
+                        continue;
+                    }
+                }
+                let functions = intersect(&d.functions, &upstream.functions);
+                if functions.is_empty() {
+                    continue;
+                }
+                return Some(Effective {
+                    functions,
+                    valid_until_secs: min_expiry(d.valid_until_secs, upstream.valid_until_secs),
+                    depth: upstream.depth + 1,
+                });
+            }
+        }
+        None
+    }
+    let mut seen = Vec::new();
+    walk(policy, caller, now_secs, 0, &mut seen)
 }
 
 /// Evaluate a call against the policy.
@@ -99,31 +216,18 @@ impl Denial {
 /// order also decides which reason a caller learns, so it goes from the
 /// least informative to the most: that a caller is unlisted reveals less
 /// than which functions exist.
-pub fn evaluate(
-    policy: &Policy,
-    caller_hex: &str,
-    function: &str,
-    now_secs: u64,
-) -> Result<(), Denial> {
+pub fn evaluate(policy: &Policy, caller_hex: &str, function: &str, now_secs: u64) -> Result<(), Denial> {
     if policy.version == 0 && policy.allowed_callers.is_empty() {
         return Err(Denial::NoPolicy);
     }
 
-    // Compare case-insensitively: a DID's identity is the bytes it
-    // decodes to, not the spelling of its hex.
-    let listed = policy
-        .allowed_callers
-        .iter()
-        .any(|c| c.eq_ignore_ascii_case(caller_hex));
-    if !listed {
-        return Err(Denial::CallerNotListed);
-    }
+    let held = effective(policy, caller_hex, now_secs).ok_or(Denial::CallerNotListed)?;
 
-    if !policy.allowed_functions.iter().any(|f| f == function) {
+    if !held.functions.iter().any(|f| f == function) {
         return Err(Denial::FunctionNotListed);
     }
 
-    if let Some(until) = policy.valid_until_secs {
+    if let Some(until) = held.valid_until_secs {
         if now_secs >= until {
             return Err(Denial::Expired {
                 valid_until_secs: until,
@@ -133,6 +237,92 @@ pub fn evaluate(
     }
 
     Ok(())
+}
+
+/// Why a delegation was refused.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DelegateError {
+    /// The delegator holds nothing right now, so has nothing to hand on.
+    DelegatorNotPermitted(Denial),
+    /// A named function is outside what the delegator holds.
+    Widens(String),
+    /// A later cutoff than the delegator's own.
+    OutlivesDelegator { delegator_until: u64, requested: Option<u64> },
+    /// Handing to oneself is meaningless and would seed a cycle.
+    SelfDelegation,
+    /// The delegator is already at the maximum depth.
+    TooDeep { depth: u32 },
+    /// Nothing named.
+    Empty,
+}
+
+impl DelegateError {
+    pub fn reason(&self) -> String {
+        match self {
+            DelegateError::DelegatorNotPermitted(d) => format!("delegator holds nothing to hand on: {}", d.reason()),
+            DelegateError::Widens(f) => format!("cannot hand on '{f}': the delegator does not hold it"),
+            DelegateError::OutlivesDelegator { delegator_until, requested } => format!(
+                "cannot hand on past the delegator's own cutoff {delegator_until} (requested {})",
+                requested.map(|v| v.to_string()).unwrap_or_else(|| "no expiry".to_string())
+            ),
+            DelegateError::SelfDelegation => "cannot delegate to oneself".to_string(),
+            DelegateError::TooDeep { depth } => format!("chain would exceed the maximum depth of {MAX_DEPTH} (delegator is at depth {depth})"),
+            DelegateError::Empty => "a delegation must name at least one function".to_string(),
+        }
+    }
+}
+
+/// Validate a proposed handoff against what the delegator holds now.
+///
+/// Narrowing is enforced here, at the moment of delegation, so a widening
+/// attempt is refused and recorded rather than stored and silently
+/// ignored. It is enforced again at every call by `effective`, so a
+/// stored delegation that somehow widened would still confer nothing.
+pub fn validate_delegation(
+    policy: &Policy,
+    from: &str,
+    to: &str,
+    functions: &[String],
+    valid_until_secs: Option<u64>,
+    now_secs: u64,
+) -> Result<Effective, DelegateError> {
+    if same_did(from, to) {
+        return Err(DelegateError::SelfDelegation);
+    }
+    if functions.is_empty() {
+        return Err(DelegateError::Empty);
+    }
+
+    let held = effective(policy, from, now_secs).ok_or(DelegateError::DelegatorNotPermitted(Denial::CallerNotListed))?;
+    if let Some(until) = held.valid_until_secs {
+        if now_secs >= until {
+            return Err(DelegateError::DelegatorNotPermitted(Denial::Expired {
+                valid_until_secs: until,
+                now_secs,
+            }));
+        }
+    }
+    if held.depth >= MAX_DEPTH {
+        return Err(DelegateError::TooDeep { depth: held.depth });
+    }
+
+    if let Some(f) = functions.iter().find(|f| !held.functions.contains(f)) {
+        return Err(DelegateError::Widens(f.clone()));
+    }
+
+    if let Some(delegator_until) = held.valid_until_secs {
+        match valid_until_secs {
+            Some(requested) if requested <= delegator_until => {}
+            other => {
+                return Err(DelegateError::OutlivesDelegator {
+                    delegator_until,
+                    requested: other,
+                })
+            }
+        }
+    }
+
+    Ok(held)
 }
 
 pub const POLICY_KEY: &[u8] = b"consent";
@@ -164,68 +354,199 @@ pub fn store(policy: &Policy) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn policy() -> Policy {
+    const OWNER_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const AGENT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const AGENT_C: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    fn root() -> Policy {
         Policy {
-            allowed_callers: vec!["abe8e6dc".to_string()],
-            allowed_functions: vec!["vault-read".to_string()],
+            allowed_callers: s(&[OWNER_A]),
+            allowed_functions: s(&["vault-read", "audit-list"]),
             valid_until_secs: Some(1000),
+            delegations: Vec::new(),
             version: 1,
         }
     }
 
+    fn with_chain() -> Policy {
+        let mut p = root();
+        p.delegations.push(Delegation {
+            from: OWNER_A.into(),
+            to: AGENT_B.into(),
+            functions: s(&["vault-read"]),
+            valid_until_secs: Some(800),
+        });
+        p
+    }
+
+    // ----- root behaviour, unchanged -----
+
     #[test]
     fn allows_a_listed_caller_and_function_before_expiry() {
-        assert!(evaluate(&policy(), "abe8e6dc", "vault-read", 999).is_ok());
+        assert!(evaluate(&root(), OWNER_A, "vault-read", 999).is_ok());
     }
 
     #[test]
     fn a_missing_policy_denies_rather_than_allows() {
-        // Forgetting to provision the map must not disable the gate.
-        let err = evaluate(&Policy::deny_all(), "abe8e6dc", "vault-read", 1).unwrap_err();
+        let err = evaluate(&Policy::deny_all(), OWNER_A, "vault-read", 1).unwrap_err();
         assert_eq!(err, Denial::NoPolicy);
     }
 
     #[test]
     fn denies_an_unlisted_caller() {
-        let err = evaluate(&policy(), "deadbeef", "vault-read", 1).unwrap_err();
-        assert_eq!(err, Denial::CallerNotListed);
+        assert_eq!(evaluate(&root(), AGENT_B, "vault-read", 1).unwrap_err(), Denial::CallerNotListed);
     }
 
     #[test]
     fn denies_a_function_the_policy_does_not_name() {
-        // This is the check the delegation grant failed to make.
-        let err = evaluate(&policy(), "abe8e6dc", "vault-put", 1).unwrap_err();
-        assert_eq!(err, Denial::FunctionNotListed);
+        assert_eq!(evaluate(&root(), OWNER_A, "vault-put", 1).unwrap_err(), Denial::FunctionNotListed);
     }
 
     #[test]
     fn denies_once_consent_has_lapsed() {
-        let err = evaluate(&policy(), "abe8e6dc", "vault-read", 1000).unwrap_err();
-        assert!(matches!(err, Denial::Expired { .. }));
-        // The boundary is exclusive: at exactly the expiry it is over.
-        assert!(evaluate(&policy(), "abe8e6dc", "vault-read", 1001).is_err());
+        assert!(matches!(evaluate(&root(), OWNER_A, "vault-read", 1000).unwrap_err(), Denial::Expired { .. }));
     }
 
     #[test]
     fn treats_hex_case_as_the_same_identity() {
-        // A DID's identity is the bytes it decodes to, not its spelling.
-        assert!(evaluate(&policy(), "ABE8E6DC", "vault-read", 1).is_ok());
+        assert!(evaluate(&root(), &OWNER_A.to_uppercase(), "vault-read", 1).is_ok());
+    }
+
+    // ----- chains -----
+
+    #[test]
+    fn a_delegatee_gets_the_intersection_not_the_gift() {
+        let p = with_chain();
+        let held = effective(&p, AGENT_B, 1).unwrap();
+        assert_eq!(held.functions, s(&["vault-read"]));
+        // The tighter of the two cutoffs wins.
+        assert_eq!(held.valid_until_secs, Some(800));
+        assert_eq!(held.depth, 1);
+        assert!(evaluate(&p, AGENT_B, "vault-read", 1).is_ok());
+        assert_eq!(evaluate(&p, AGENT_B, "audit-list", 1).unwrap_err(), Denial::FunctionNotListed);
     }
 
     #[test]
-    fn an_emptied_caller_list_denies_everyone() {
-        // This is what withdrawing consent looks like on the wire.
-        let mut p = policy();
+    fn a_stored_delegation_cannot_widen_at_use() {
+        // Even if a widened delegation somehow reached storage, use-time
+        // intersection strips what the delegator never held.
+        let mut p = root();
+        p.delegations.push(Delegation {
+            from: OWNER_A.into(),
+            to: AGENT_B.into(),
+            functions: s(&["vault-read", "vault-put"]),
+            valid_until_secs: None,
+        });
+        let held = effective(&p, AGENT_B, 1).unwrap();
+        assert_eq!(held.functions, s(&["vault-read"]));
+        assert_eq!(held.valid_until_secs, Some(1000), "inherits the root cutoff");
+        assert_eq!(evaluate(&p, AGENT_B, "vault-put", 1).unwrap_err(), Denial::FunctionNotListed);
+    }
+
+    #[test]
+    fn revoking_the_root_kills_the_whole_chain() {
+        // This is the property that matters: nothing is deleted, the
+        // delegation row is still there, and it confers nothing.
+        let mut p = with_chain();
         p.allowed_callers.clear();
         p.version = 2;
-        let err = evaluate(&p, "abe8e6dc", "vault-read", 1).unwrap_err();
-        assert_eq!(err, Denial::CallerNotListed);
+        assert_eq!(p.delegations.len(), 1);
+        assert_eq!(evaluate(&p, AGENT_B, "vault-read", 1).unwrap_err(), Denial::CallerNotListed);
     }
 
     #[test]
-    fn no_expiry_means_it_does_not_lapse() {
-        let mut p = policy();
+    fn an_expired_delegator_confers_nothing() {
+        let p = with_chain();
+        // Root lapses at 1000; B's own cutoff is 800. At 900 B is already
+        // past its own cutoff; at 1000 the root is gone as well.
+        assert!(matches!(evaluate(&p, AGENT_B, "vault-read", 900).unwrap_err(), Denial::Expired { .. }));
+        assert_eq!(evaluate(&p, AGENT_B, "vault-read", 1000).unwrap_err(), Denial::CallerNotListed);
+    }
+
+    #[test]
+    fn a_second_hop_intersects_again_and_hits_the_depth_cap() {
+        let mut p = with_chain();
+        p.delegations.push(Delegation {
+            from: AGENT_B.into(),
+            to: AGENT_C.into(),
+            functions: s(&["vault-read"]),
+            valid_until_secs: Some(500),
+        });
+        let held = effective(&p, AGENT_C, 1).unwrap();
+        assert_eq!(held.depth, 2);
+        assert_eq!(held.valid_until_secs, Some(500));
+        assert!(evaluate(&p, AGENT_C, "vault-read", 1).is_ok());
+        // C may not hand on further: depth 2 is the cap.
+        let err = validate_delegation(&p, AGENT_C, OWNER_A, &s(&["vault-read"]), Some(400), 1).unwrap_err();
+        assert_eq!(err, DelegateError::TooDeep { depth: 2 });
+    }
+
+    #[test]
+    fn a_cycle_confers_nothing_and_terminates() {
+        let mut p = Policy::deny_all();
+        p.version = 1;
+        p.delegations.push(Delegation { from: AGENT_B.into(), to: AGENT_C.into(), functions: s(&["vault-read"]), valid_until_secs: None });
+        p.delegations.push(Delegation { from: AGENT_C.into(), to: AGENT_B.into(), functions: s(&["vault-read"]), valid_until_secs: None });
+        assert!(effective(&p, AGENT_B, 1).is_none());
+        assert!(effective(&p, AGENT_C, 1).is_none());
+    }
+
+    // ----- validating a proposed handoff -----
+
+    #[test]
+    fn delegation_of_a_subset_is_accepted() {
+        let held = validate_delegation(&root(), OWNER_A, AGENT_B, &s(&["vault-read"]), Some(800), 1).unwrap();
+        assert_eq!(held.depth, 0);
+    }
+
+    #[test]
+    fn delegation_refuses_to_widen() {
+        let err = validate_delegation(&root(), OWNER_A, AGENT_B, &s(&["vault-read", "vault-put"]), Some(800), 1).unwrap_err();
+        assert_eq!(err, DelegateError::Widens("vault-put".into()));
+    }
+
+    #[test]
+    fn delegation_refuses_to_outlive_the_delegator() {
+        let err = validate_delegation(&root(), OWNER_A, AGENT_B, &s(&["vault-read"]), Some(5000), 1).unwrap_err();
+        assert!(matches!(err, DelegateError::OutlivesDelegator { delegator_until: 1000, .. }));
+        // No cutoff at all is also longer than a bounded delegator.
+        let err = validate_delegation(&root(), OWNER_A, AGENT_B, &s(&["vault-read"]), None, 1).unwrap_err();
+        assert!(matches!(err, DelegateError::OutlivesDelegator { requested: None, .. }));
+    }
+
+    #[test]
+    fn an_unbounded_delegator_may_hand_on_unbounded() {
+        let mut p = root();
         p.valid_until_secs = None;
-        assert!(evaluate(&p, "abe8e6dc", "vault-read", u64::MAX).is_ok());
+        assert!(validate_delegation(&p, OWNER_A, AGENT_B, &s(&["vault-read"]), None, 1).is_ok());
+    }
+
+    #[test]
+    fn delegation_by_someone_holding_nothing_is_refused() {
+        let err = validate_delegation(&root(), AGENT_C, AGENT_B, &s(&["vault-read"]), Some(10), 1).unwrap_err();
+        assert!(matches!(err, DelegateError::DelegatorNotPermitted(Denial::CallerNotListed)));
+        let err = validate_delegation(&root(), OWNER_A, AGENT_B, &s(&["vault-read"]), Some(10), 1000).unwrap_err();
+        assert!(matches!(err, DelegateError::DelegatorNotPermitted(Denial::Expired { .. })));
+    }
+
+    #[test]
+    fn delegation_to_self_and_empty_delegation_are_refused() {
+        assert_eq!(validate_delegation(&root(), OWNER_A, OWNER_A, &s(&["vault-read"]), Some(10), 1).unwrap_err(), DelegateError::SelfDelegation);
+        assert_eq!(validate_delegation(&root(), OWNER_A, AGENT_B, &[], Some(10), 1).unwrap_err(), DelegateError::Empty);
+    }
+
+    #[test]
+    fn a_legacy_policy_without_delegations_still_decodes() {
+        let legacy = serde_json::json!({
+            "allowed_callers": [OWNER_A], "allowed_functions": ["vault-read"],
+            "valid_until_secs": 1000, "version": 3
+        });
+        let p: Policy = serde_json::from_value(legacy).unwrap();
+        assert!(p.delegations.is_empty());
+        assert!(evaluate(&p, OWNER_A, "vault-read", 1).is_ok());
     }
 }

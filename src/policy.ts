@@ -22,7 +22,8 @@ import {
   DECLARED_TENANT_DID,
   GRANT_TTL_SECS,
 } from "./config.js";
-import { canonicalName, openCallerSession, openTenantSession } from "./session.js";
+import { openCaller } from "./caller.js";
+import { canonicalName, openTenantSession } from "./session.js";
 
 /** Functions consent covers when permitted. Read-only, deliberately. */
 export const ALLOWED_FUNCTIONS = ["vault-read", "audit-list"];
@@ -30,11 +31,19 @@ export const ALLOWED_FUNCTIONS = ["vault-read", "audit-list"];
 /** Deliberately outside consent, so the gate is observably real. */
 export const WITHHELD_FUNCTIONS = ["vault-put"];
 
+interface Delegation {
+  from: string;
+  to: string;
+  functions: string[];
+  valid_until_secs: number | null;
+}
+
 interface PolicyView {
   version: number;
   allowed_callers: string[];
   allowed_functions: string[];
   valid_until_secs: number | null;
+  delegations?: Delegation[];
   now_secs: number;
   expired: boolean;
 }
@@ -74,6 +83,15 @@ function describe(view: PolicyView): void {
     );
   }
   console.log(`  cluster time ${new Date(view.now_secs * 1000).toISOString()}`);
+  const chain = view.delegations ?? [];
+  if (chain.length > 0) {
+    console.log(`  chain`);
+    for (const d of chain) {
+      const until = d.valid_until_secs === null ? "no expiry" : new Date(d.valid_until_secs * 1000).toISOString();
+      console.log(`    ${d.from.slice(0, 8)}... -> ${d.to.slice(0, 8)}...  [${d.functions.join(", ")}]  until ${until}`);
+    }
+    console.log(`    each hop holds the intersection with what its delegator still holds`);
+  }
 }
 
 async function main() {
@@ -104,7 +122,7 @@ async function main() {
   }
 
   if (action === "allow") {
-    const caller = await openCallerSession();
+    const caller = await openCaller();
     const until = Math.floor(Date.now() / 1000) + GRANT_TTL_SECS;
     const result = await call<PolicySetResult>("policy-set", {
       allowed_callers: [didBody(caller.did)],
@@ -112,7 +130,7 @@ async function main() {
       valid_until_secs: until,
     });
     console.log(`consent granted, policy version ${result.version}`);
-    console.log(`  caller    ${caller.did}`);
+    console.log(`  caller    ${caller.did}   (${caller.role})`);
     console.log(`  functions ${result.allowed_functions.join(", ")}`);
     console.log(`  withheld  ${WITHHELD_FUNCTIONS.join(", ")}`);
     console.log(`  expires   ${new Date(until * 1000).toISOString()} (${GRANT_TTL_SECS}s)`);

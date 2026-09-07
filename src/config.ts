@@ -80,7 +80,7 @@ export const CONTRACT_TAIL = optional("CONTRACT_TAIL") ?? "consent-vault";
  * Bump this on every re-register. A version that is not strictly
  * higher than the deployed one is refused.
  */
-export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.3.1";
+export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.4.1";
 
 /** Built by `npm run contract:build`. */
 export const WASM_PATH =
