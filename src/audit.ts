@@ -1,16 +1,16 @@
 /**
- * The receipt. Reads back the audit trail the accesses produced.
+ * The receipt. Reads back the audit trail the attempts produced.
  *
  *   npm run audit
  *
- * Every field here is set inside the enclave from node-minted context,
- * not from the caller's input: the sequence number, the cluster
- * timestamp, the contract id and the calling DID cannot be forged by
- * whoever made the call.
+ * Every provenance field here is set inside the enclave from
+ * node-minted context, not from the caller's input: the sequence
+ * number, the cluster timestamp, the contract id and the calling
+ * identity cannot be forged by whoever made the call.
  */
 import { getContractVersion, getNodeUrl } from "@terminal3/t3n-sdk";
 import { CONTRACT_TAIL, DECLARED_TENANT_DID } from "./config.js";
-import { canonicalName, openAgentSession } from "./session.js";
+import { canonicalName, openAgentSession, resolveGrantSubject } from "./session.js";
 
 interface AuditEntry {
   seq_no: number;
@@ -21,11 +21,14 @@ interface AuditEntry {
   action: string;
   record_id: string;
   purpose: string;
+  outcome: string;
+  reason: string;
 }
 
 interface AuditListResponse {
   entries: AuditEntry[];
   count: number;
+  malformed_entries: number;
 }
 
 async function main() {
@@ -36,11 +39,15 @@ async function main() {
   const agent = await openAgentSession();
   const contractName = canonicalName(DECLARED_TENANT_DID, CONTRACT_TAIL);
   const version = await getContractVersion(getNodeUrl(), contractName);
+  const subject = await resolveGrantSubject();
 
   const result = await agent.client.executeAndDecode<AuditListResponse>({
     contract_id: contractName,
     contract_version: version,
     function_name: "audit-list",
+    // Same reason as the read: this trail belongs to the data owner's
+    // grant, not to the agent's own.
+    pii_did: subject,
     input: { limit: 100 },
   });
 
@@ -48,13 +55,23 @@ async function main() {
 
   for (const entry of result.entries) {
     const when = new Date(entry.at_secs * 1000).toISOString();
-    console.log(`seq ${entry.seq_no}  ${when}`);
+    const outcome = entry.outcome || "(not recorded)";
+    console.log(`seq ${entry.seq_no}  ${when}  ${outcome}`);
     console.log(`  action   ${entry.action}`);
     console.log(`  record   ${entry.record_id}`);
     console.log(`  caller   did:t3n:${entry.caller_did}`);
     console.log(`  contract ${entry.contract_id}`);
     if (entry.purpose) console.log(`  purpose  ${entry.purpose}`);
+    if (entry.reason) console.log(`  reason   ${entry.reason}`);
     console.log();
+  }
+
+  if (result.malformed_entries > 0) {
+    console.warn(
+      `${result.malformed_entries} stored entr${result.malformed_entries === 1 ? "y was" : "ies were"} ` +
+        `not decodable and were skipped.\n` +
+        `Reading the rest still works, but something wrote a malformed entry.`,
+    );
   }
 
   if (result.count === 0) {

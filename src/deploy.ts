@@ -65,13 +65,18 @@ async function main() {
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
       if (!/already exists/i.test(detail)) throw error;
-      // Idempotent on redeploy. The real hazard is a surviving map whose
-      // rules still name a contract id from an earlier registration.
-      console.log(`map ${tenant.canonicalName(tail)} already exists`);
-      console.log(
-        `  on a re-registration its rules may still name an older contract id.\n` +
-          `  Update them with tenant.maps.update to include ${contractId}.`,
-      );
+
+      // The map survived from an earlier registration, so its rules still
+      // name that registration's contract id. Re-point them at the id this
+      // run just received. Doing this as a standard step, rather than
+      // leaving it to be noticed later, is the whole fix: re-registration
+      // alone does not carry access forward, and the symptom is a map the
+      // contract owns but cannot touch.
+      await tenant.maps.update(tail, {
+        writers: { only: [contractId] },
+        readers: { only: [contractId] },
+      });
+      console.log(`map ${tenant.canonicalName(tail)} existed, re-pointed to contract ${contractId}`);
     }
   }
 

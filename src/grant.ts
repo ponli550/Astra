@@ -83,6 +83,13 @@ async function main() {
     console.log(`  ${g.contract_id} functions=[${g.functions.join(", ")}] until=${g.window?.valid_until_secs ?? "unbounded"}`);
   }
 
+  console.log(
+    `\nAdd this line to .env so the agent scripts name the right grant subject:\n` +
+      `  USER_DID=${user.did}\n` +
+      `Without it a delegated call is checked against the agent's own grants,\n` +
+      `which are empty, and the denial reads like a misconfigured allowlist.`,
+  );
+
   console.log(`\nnext: npm run invoke`);
 }
 

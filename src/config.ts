@@ -49,7 +49,7 @@ export const CONTRACT_TAIL = optional("CONTRACT_TAIL") ?? "consent-vault";
  * Bump this on every re-register. A version that is not strictly
  * higher than the deployed one is refused.
  */
-export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.1.0";
+export const CONTRACT_VERSION = optional("CONTRACT_VERSION") ?? "0.2.0";
 
 /** Built by `npm run contract:build`. */
 export const WASM_PATH =
@@ -86,3 +86,25 @@ export const DECLARED_TENANT_DID = optional("DID");
 
 /** Vault record the deploy step seeds and the invoke step reads back. */
 export const DEMO_RECORD = "medical-1";
+
+/**
+ * The identity whose grant a delegated call is checked against.
+ *
+ * This is the single most important field on an invocation and the
+ * easiest to omit. A call that does not name a subject is treated as a
+ * self-call by the caller's own identity, so the node looks up the
+ * agent's own grants, which are empty, instead of the grants the data
+ * owner signed. It surfaces as a permission or egress denial that reads
+ * like a misconfigured allowlist, while the real problem is that the
+ * lookup subject is wrong. Grant read-backs look correct throughout,
+ * because a diagnostic read is authenticated as the granting identity
+ * and therefore checks the right place.
+ *
+ * In this project the data owner is the user, so the subject is the
+ * user's DID. `npm run grant` prints the line to paste here.
+ *
+ * A production agent receives this DID out of band and never holds the
+ * user's key. When it is absent, the demo scripts fall back to
+ * authenticating with `USER_KEY` purely to resolve it, and say so.
+ */
+export const DECLARED_USER_DID = optional("USER_DID");
